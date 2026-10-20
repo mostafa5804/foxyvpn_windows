@@ -133,7 +133,8 @@ jobs:
           Compress-Archive -Path "build\bin\*" -DestinationPath "release\FoxyVPN-Windows-amd64.zip" -Force
 
           # 3. Standard Windows NSIS Installer (FoxyVPN-Setup.exe) with Desktop & Start Menu Shortcuts
-          if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
+          $makensisExe = "C:\Program Files (x86)\NSIS\makensis.exe"
+          if (-not (Test-Path $makensisExe)) {
             choco install nsis -y
           }
           $nsiScript = @'
@@ -175,7 +176,7 @@ jobs:
           SectionEnd
           '@
           $nsiScript | Set-Content -Path "installer.nsi" -Encoding UTF8
-          makensis installer.nsi
+          & $makensisExe installer.nsi
           Write-Host "Successfully built FoxyVPN-Portable.exe, FoxyVPN-Setup.exe, and FoxyVPN-Windows-amd64.zip"
 
       - name: Upload Portable EXE Artifact
