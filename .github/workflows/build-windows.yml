@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   build-windows:
-    name: Build Windows amd64 (.exe + Wintun)
+    name: Build Windows amd64 (Portable EXE + Setup Installer + ZIP)
     runs-on: windows-latest
 
     steps:
@@ -74,10 +74,21 @@ jobs:
       - name: Build Frontend Assets (dist/)
         run: npm run build
 
+      - name: Download Official Wintun v0.14.1 Driver & Embed into Go Binary
+        shell: pwsh
+        run: |
+          $wintunUrl = "https://www.wintun.net/builds/wintun-0.14.1.zip"
+          $zipPath = "$env:TEMP\wintun.zip"
+          $extractPath = "$env:TEMP\wintun_extracted"
+          Invoke-WebRequest -Uri $wintunUrl -OutFile $zipPath -UseBasicParsing
+          Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+          Copy-Item -Force "$extractPath\wintun\bin\amd64\wintun.dll" "pkg\vpn\wintun.dll"
+          Write-Host "Embedded official wintun.dll (amd64) into pkg/vpn/wintun.dll for standalone FoxyVPN-Portable.exe"
+
       - name: Install Wails v2 CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.9.2
 
-      - name: Prepare Windows Manifest & App Icon
+      - name: Prepare Windows UAC Manifest & App Icon
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "build/windows" | Out-Null
@@ -86,52 +97,114 @@ jobs:
             Add-Type -AssemblyName System.Drawing
             $bmp = New-Object System.Drawing.Bitmap(512, 512)
             $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
             $g.Clear([System.Drawing.Color]::FromArgb(255, 11, 15, 23))
-            $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 254, 108, 49))
-            $g.FillEllipse($brush, 64, 64, 384, 384)
+            $bgBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 22, 31, 48))
+            $g.FillEllipse($bgBrush, 36, 36, 440, 440)
+            $foxBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 254, 108, 49))
+            $g.FillEllipse($foxBrush, 96, 96, 320, 320)
+            $winBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 0, 120, 214))
+            $g.FillRectangle($winBrush, 196, 196, 54, 54)
+            $g.FillRectangle($winBrush, 262, 196, 54, 54)
+            $g.FillRectangle($winBrush, 196, 262, 54, 54)
+            $g.FillRectangle($winBrush, 262, 262, 54, 54)
             $g.Dispose()
             $bmp.Save("build/appicon.png", [System.Drawing.Imaging.ImageFormat]::Png)
             $bmp.Dispose()
           }
 
-      - name: Resolve Go Modules & Build FoxyVPN Windows Executable
+      - name: Build FoxyVPN Windows Executable (Wails v2)
         shell: pwsh
         run: |
           go mod tidy
           wails build -platform windows/amd64 -clean -s -o FoxyVPN.exe
+          Copy-Item -Force "pkg\vpn\wintun.dll" "build\bin\wintun.dll"
 
-      - name: Download Official Wintun v0.14.1 Driver (amd64)
-        shell: pwsh
-        run: |
-          $wintunUrl = "https://www.wintun.net/builds/wintun-0.14.1.zip"
-          $zipPath = "$env:TEMP\wintun.zip"
-          $extractPath = "$env:TEMP\wintun_extracted"
-          Invoke-WebRequest -Uri $wintunUrl -OutFile $zipPath -UseBasicParsing
-          Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
-          Copy-Item -Force "$extractPath\wintun\bin\amd64\wintun.dll" "build\bin\wintun.dll"
-          Write-Host "Successfully bundled wintun.dll (amd64) into build/bin/"
-
-      - name: Package Portable Release ZIP
+      - name: Create Standalone Portable EXE, NSIS Setup Installer EXE, and Archive ZIP
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "release" | Out-Null
+
+          # 1. Standalone Single-File Portable EXE (with embedded wintun.dll)
+          Copy-Item -Force "build\bin\FoxyVPN.exe" "release\FoxyVPN-Portable.exe"
+
+          # 2. Archive ZIP Bundle (FoxyVPN.exe + wintun.dll + README.md)
           Copy-Item -Force "README.md" "build\bin\README.md"
           Compress-Archive -Path "build\bin\*" -DestinationPath "release\FoxyVPN-Windows-amd64.zip" -Force
 
-      - name: Upload Windows Build Artifact
+          # 3. Standard Windows NSIS Installer (FoxyVPN-Setup.exe) with Desktop & Start Menu Shortcuts
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
+            choco install nsis -y
+          }
+          $nsiScript = @'
+          !include "MUI2.nsh"
+          Name "FoxyVPN Windows"
+          OutFile "release\FoxyVPN-Setup.exe"
+          InstallDir "$PROGRAMFILES64\FoxyVPN"
+          RequestExecutionLevel admin
+          !insertmacro MUI_PAGE_WELCOME
+          !insertmacro MUI_PAGE_DIRECTORY
+          !insertmacro MUI_PAGE_INSTFILES
+          !insertmacro MUI_PAGE_FINISH
+          !insertmacro MUI_UNPAGE_CONFIRM
+          !insertmacro MUI_UNPAGE_INSTFILES
+          !insertmacro MUI_LANGUAGE "English"
+
+          Section "Install"
+            SetOutPath "$INSTDIR"
+            File "build\bin\FoxyVPN.exe"
+            File "build\bin\wintun.dll"
+            File "README.md"
+            WriteUninstaller "$INSTDIR\Uninstall.exe"
+            CreateDirectory "$SMPROGRAMS\FoxyVPN"
+            CreateShortCut "$SMPROGRAMS\FoxyVPN\FoxyVPN.lnk" "$INSTDIR\FoxyVPN.exe"
+            CreateShortCut "$SMPROGRAMS\FoxyVPN\Uninstall FoxyVPN.lnk" "$INSTDIR\Uninstall.exe"
+            CreateShortCut "$DESKTOP\FoxyVPN.lnk" "$INSTDIR\FoxyVPN.exe"
+          SectionEnd
+
+          Section "Uninstall"
+            Delete "$INSTDIR\FoxyVPN.exe"
+            Delete "$INSTDIR\wintun.dll"
+            Delete "$INSTDIR\README.md"
+            Delete "$INSTDIR\Uninstall.exe"
+            Delete "$SMPROGRAMS\FoxyVPN\FoxyVPN.lnk"
+            Delete "$SMPROGRAMS\FoxyVPN\Uninstall FoxyVPN.lnk"
+            RMDir "$SMPROGRAMS\FoxyVPN"
+            Delete "$DESKTOP\FoxyVPN.lnk"
+            RMDir "$INSTDIR"
+          SectionEnd
+          '@
+          $nsiScript | Set-Content -Path "installer.nsi" -Encoding UTF8
+          makensis installer.nsi
+          Write-Host "Successfully built FoxyVPN-Portable.exe, FoxyVPN-Setup.exe, and FoxyVPN-Windows-amd64.zip"
+
+      - name: Upload Portable EXE Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FoxyVPN-Windows-amd64
-          path: |
-            release/FoxyVPN-Windows-amd64.zip
-            build/bin/FoxyVPN.exe
-            build/bin/wintun.dll
+          name: FoxyVPN-Portable-EXE
+          path: release/FoxyVPN-Portable.exe
           retention-days: 30
 
-      - name: Publish GitHub Release (on Tag v* or V*)
+      - name: Upload Windows Setup Installer Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FoxyVPN-Setup-EXE
+          path: release/FoxyVPN-Setup.exe
+          retention-days: 30
+
+      - name: Upload Windows Archive ZIP Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FoxyVPN-Windows-amd64-ZIP
+          path: release/FoxyVPN-Windows-amd64.zip
+          retention-days: 30
+
+      - name: Publish Direct EXE & ZIP to GitHub Releases (on Tag v* or V*)
         if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/V')
         uses: softprops/action-gh-release@v2
         with:
           files: |
+            release/FoxyVPN-Portable.exe
+            release/FoxyVPN-Setup.exe
             release/FoxyVPN-Windows-amd64.zip
           generate_release_notes: true

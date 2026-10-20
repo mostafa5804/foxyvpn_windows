@@ -100,6 +100,7 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	_ = vpn.EnsureWintunDriver()
 	a.appendLog("INFO", "FoxyVPN Windows Client started (Wintun + HTTP/2 CONNECT + DoH Engine ready)")
 
 	if saved, err := a.authSvc.LoadTokens(); err == nil && saved.AccessToken != "" {

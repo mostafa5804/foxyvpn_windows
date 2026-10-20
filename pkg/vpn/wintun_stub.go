@@ -7,8 +7,12 @@ import "errors"
 // WintunController is a cross-platform stub when building/testing on Linux or macOS.
 type WintunController struct{}
 
+func EnsureWintunDriver() error {
+	return nil
+}
+
 func StartWintunAdapter(cfg TunnelConfig, eng *Engine) (*WintunController, error) {
-	return nil, errors.New("Wintun driver is only supported on Windows (using SOCKS5/HTTP Proxy fallback)")
+	return nil, errors.New("Wintun virtual adapter is only supported on Windows")
 }
 
 func (w *WintunController) Close() error {

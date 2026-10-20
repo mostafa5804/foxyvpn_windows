@@ -3,10 +3,13 @@
 package vpn
 
 import (
+	_ "embed"
 	"encoding/binary"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"syscall"
 
@@ -15,11 +18,38 @@ import (
 	"golang.zx2c4.com/wintun"
 )
 
+//go:embed wintun.dll
+var embeddedWintunDLL []byte
+
 const (
 	AdapterName = "FoxyVPN-Adapter"
 	TunnelType  = "FoxyVPN"
 	RingCap     = 0x400000 // 4 MB Wintun ring buffer
 )
+
+// EnsureWintunDriver extracts the embedded wintun.dll next to the running executable
+// so FoxyVPN-Portable.exe works as a 100% standalone single-file executable.
+func EnsureWintunDriver() error {
+	// Official wintun.dll (amd64) is ~450 KB; ignore tiny CI placeholder
+	if len(embeddedWintunDLL) < 64*1024 {
+		return nil
+	}
+
+	targetPaths := []string{"wintun.dll"}
+	if exePath, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exePath)
+		dllInExeDir := filepath.Join(exeDir, "wintun.dll")
+		targetPaths = append([]string{dllInExeDir}, targetPaths...)
+	}
+
+	for _, p := range targetPaths {
+		if info, err := os.Stat(p); err == nil && info.Size() > 64*1024 {
+			continue
+		}
+		_ = os.WriteFile(p, embeddedWintunDLL, 0644)
+	}
+	return nil
+}
 
 // WintunController manages the native Windows Wintun virtual adapter, routing table, and packet loop.
 type WintunController struct {
@@ -34,6 +64,8 @@ type WintunController struct {
 
 // StartWintunAdapter creates or opens "FoxyVPN-Adapter", assigns 10.0.0.2/24, configures split default routes, and launches packet processing.
 func StartWintunAdapter(cfg TunnelConfig, eng *Engine) (*WintunController, error) {
+	_ = EnsureWintunDriver()
+
 	adapter, err := wintun.OpenAdapter(AdapterName)
 	if err != nil {
 		adapter, err = wintun.CreateAdapter(AdapterName, TunnelType, nil)
