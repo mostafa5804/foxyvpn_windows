@@ -10,6 +10,7 @@ import (
 	"sync"
 	"syscall"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 	"golang.zx2c4.com/wintun"
 )
@@ -24,7 +25,7 @@ const (
 type WintunController struct {
 	adapter  *wintun.Adapter
 	session  wintun.Session
-	readWait syscall.Handle
+	readWait windows.Handle
 	engine   *Engine
 	edgeIP   string
 	stopOnce sync.Once
@@ -118,7 +119,7 @@ func (w *WintunController) packetProcessingLoop() {
 
 		pkt, err := w.session.ReceivePacket()
 		if err != nil {
-			_, _ = syscall.WaitForSingleObject(w.readWait, 50)
+			_, _ = windows.WaitForSingleObject(w.readWait, 50)
 			continue
 		}
 

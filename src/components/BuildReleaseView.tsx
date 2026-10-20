@@ -17,7 +17,9 @@ const WORKFLOW_YAML = `name: Build FoxyVPN Windows Client
 on:
   push:
     branches: [ main, master ]
-    tags: [ 'v*' ]
+    tags:
+      - 'v*'
+      - 'V*'
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
@@ -38,34 +40,67 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.23'
-          cache: true
+          cache: false
 
-      - name: Set up Node.js 22
+      - name: Set up Node.js 22 (No Lockfile Required)
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'npm'
+
+      - name: Normalize package.json for Public NPM Registry
+        shell: pwsh
+        run: |
+          $pkg = @{
+            name = "foxyvpn-windows"
+            private = $true
+            version = "1.2.0"
+            type = "module"
+            scripts = @{
+              dev = "vite --port=3000 --host=0.0.0.0"
+              build = "vite build"
+              preview = "vite preview"
+            }
+            dependencies = @{
+              "@tailwindcss/vite" = "^4.0.9"
+              "@vitejs/plugin-react" = "^4.3.4"
+              "lucide-react" = "^0.475.0"
+              "react" = "^19.0.0"
+              "react-dom" = "^19.0.0"
+              "tailwindcss" = "^4.0.9"
+              "vite" = "^6.2.0"
+            }
+            devDependencies = @{
+              "@types/node" = "^22.13.0"
+              "@types/react" = "^19.0.0"
+              "@types/react-dom" = "^19.0.0"
+              "typescript" = "^5.8.2"
+            }
+          }
+          $pkg | ConvertTo-Json -Depth 5 | Set-Content -Path "package.json" -Encoding UTF8
 
       - name: Install Frontend Dependencies
-        run: npm install
+        run: npm install --no-audit --no-fund
 
       - name: Run Logic Unit Tests
         run: node --test src/utils/vpnLogic.test.ts
 
+      - name: Build Frontend Assets (dist/)
+        run: npm run build
+
       - name: Install Wails v2 CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.9.2
 
-      - name: Copy UAC Administrator Manifest
+      - name: Prepare Windows Manifest & App Icon
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "build/windows" | Out-Null
           Copy-Item -Force "manifest.xml" "build/windows/wails.exe.manifest"
 
-      - name: Build FoxyVPN Windows Executable
+      - name: Resolve Go Modules & Build FoxyVPN Windows Executable
         shell: pwsh
         run: |
           go mod tidy
-          wails build -platform windows/amd64 -clean -o FoxyVPN.exe
+          wails build -platform windows/amd64 -clean -s -o FoxyVPN.exe
 
       - name: Download Official Wintun v0.14.1 Driver (amd64)
         shell: pwsh
@@ -91,18 +126,23 @@ jobs:
           path: |
             release/FoxyVPN-Windows-amd64.zip
             build/bin/FoxyVPN.exe
-            build/bin/wintun.dll`;
+            build/bin/wintun.dll
 
-const GIT_COMMANDS = `git init
-git add .
-git commit -m "feat: FoxyVPN Windows Wails v2 client with in-app FxA registration & Wintun"
-git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/foxyvpn-windows.git
-git push -u origin main
+      - name: Publish GitHub Release (on Tag v* or V*)
+        if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/V')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/FoxyVPN-Windows-amd64.zip
+          generate_release_notes: true`;
 
-# Optional: Push a version tag to trigger automatic GitHub Release (.zip)
-git tag v1.2.0
-git push origin v1.2.0`;
+const GIT_COMMANDS = `git add .
+git commit -m "fix(ci): remove npm lockfile cache error & support v/V release tags"
+git push origin main
+
+# Trigger automatic build & GitHub Release with v* or V* tag:
+git tag v1.0.0
+git push origin v1.0.0`;
 
 export const BuildReleaseView: React.FC<BuildReleaseViewProps> = ({ isDark }) => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -120,7 +160,7 @@ export const BuildReleaseView: React.FC<BuildReleaseViewProps> = ({ isDark }) =>
     { path: 'pkg/vpn/wintun_windows.go', desc: 'Native Windows Wintun adapter (10.0.0.2/24), split routing table, UDP/53 DNS interception, and WinINET registry proxy' },
     { path: 'app.go & main.go', desc: 'Wails v2 typed frontend bindings, 50% lifetime ProxyPass auto-renewal loop, and UAC safe shutdown handler' },
     { path: 'manifest.xml & wails.json', desc: 'Windows UAC requireAdministrator manifest and Wails v2 desktop bundler config' },
-    { path: '.github/workflows/build-windows.yml', desc: 'Automated GitHub Actions CI that compiles FoxyVPN.exe, bundles wintun.dll (v0.14.1 amd64), and publishes release ZIP' },
+    { path: '.github/workflows/build-windows.yml', desc: 'Automated GitHub Actions CI supporting v* and V* tags without lockfile errors' },
   ];
 
   return (
@@ -164,7 +204,7 @@ export const BuildReleaseView: React.FC<BuildReleaseViewProps> = ({ isDark }) =>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm font-semibold">
             <Terminal className="w-4 h-4 text-orange-400" />
-            <span>Push to GitHub & Trigger Automatic .EXE Release</span>
+            <span>Push to GitHub & Trigger Automatic .EXE Release (v* / V*)</span>
           </div>
           <button
             type="button"

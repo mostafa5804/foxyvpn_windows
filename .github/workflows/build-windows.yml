@@ -3,7 +3,9 @@ name: Build FoxyVPN Windows Client
 on:
   push:
     branches: [ main, master ]
-    tags: [ 'v*' ]
+    tags:
+      - 'v*'
+      - 'V*'
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
@@ -24,34 +26,79 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.23'
-          cache: true
+          cache: false
 
-      - name: Set up Node.js 22
+      - name: Set up Node.js 22 (No Lockfile Required)
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'npm'
+
+      - name: Normalize package.json for Public NPM Registry
+        shell: pwsh
+        run: |
+          $pkg = @{
+            name = "foxyvpn-windows"
+            private = $true
+            version = "1.2.0"
+            type = "module"
+            scripts = @{
+              dev = "vite --port=3000 --host=0.0.0.0"
+              build = "vite build"
+              preview = "vite preview"
+            }
+            dependencies = @{
+              "@tailwindcss/vite" = "^4.0.9"
+              "@vitejs/plugin-react" = "^4.3.4"
+              "lucide-react" = "^0.475.0"
+              "react" = "^19.0.0"
+              "react-dom" = "^19.0.0"
+              "tailwindcss" = "^4.0.9"
+              "vite" = "^6.2.0"
+            }
+            devDependencies = @{
+              "@types/node" = "^22.13.0"
+              "@types/react" = "^19.0.0"
+              "@types/react-dom" = "^19.0.0"
+              "tsx" = "^4.19.2"
+              "typescript" = "^5.8.2"
+            }
+          }
+          $pkg | ConvertTo-Json -Depth 5 | Set-Content -Path "package.json" -Encoding UTF8
 
       - name: Install Frontend Dependencies
-        run: npm install
+        run: npm install --no-audit --no-fund
 
       - name: Run Logic Unit Tests
-        run: node --test src/utils/vpnLogic.test.ts
+        run: npx tsx --test src/utils/vpnLogic.test.ts
+
+      - name: Build Frontend Assets (dist/)
+        run: npm run build
 
       - name: Install Wails v2 CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.9.2
 
-      - name: Copy UAC Administrator Manifest
+      - name: Prepare Windows Manifest & App Icon
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "build/windows" | Out-Null
           Copy-Item -Force "manifest.xml" "build/windows/wails.exe.manifest"
+          if (-not (Test-Path "build/appicon.png")) {
+            Add-Type -AssemblyName System.Drawing
+            $bmp = New-Object System.Drawing.Bitmap(512, 512)
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.Clear([System.Drawing.Color]::FromArgb(255, 11, 15, 23))
+            $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 254, 108, 49))
+            $g.FillEllipse($brush, 64, 64, 384, 384)
+            $g.Dispose()
+            $bmp.Save("build/appicon.png", [System.Drawing.Imaging.ImageFormat]::Png)
+            $bmp.Dispose()
+          }
 
-      - name: Build FoxyVPN Windows Executable
+      - name: Resolve Go Modules & Build FoxyVPN Windows Executable
         shell: pwsh
         run: |
           go mod tidy
-          wails build -platform windows/amd64 -clean -o FoxyVPN.exe
+          wails build -platform windows/amd64 -clean -s -o FoxyVPN.exe
 
       - name: Download Official Wintun v0.14.1 Driver (amd64)
         shell: pwsh
@@ -81,8 +128,8 @@ jobs:
             build/bin/wintun.dll
           retention-days: 30
 
-      - name: Publish GitHub Release (on Tag)
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish GitHub Release (on Tag v* or V*)
+        if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/V')
         uses: softprops/action-gh-release@v2
         with:
           files: |
