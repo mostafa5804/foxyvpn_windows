@@ -1,0 +1,6 @@
+{
+  "name": "FoxyVPN Windows Client",
+  "description": "Production-ready Windows Desktop VPN Client powered by Mozilla Guardian 50GB monthly allowance, Fastly HTTP/2 CONNECT, Wintun TUN adapter, DoH DNS, and Anti-DPI TLS fragmentation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

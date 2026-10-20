@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FoxyVPN Windows — Standalone UI Preview</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    body {
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background-color: #0B0F17;
+      color: #F1F5F9;
+    }
+    .font-mono, code, pre {
+      font-family: 'IBM Plex Mono', monospace;
+      font-variant-numeric: tabular-nums;
+    }
+    .tabular-nums {
+      font-variant-numeric: tabular-nums;
+    }
+  </style>
+</head>
+<body class="min-h-screen antialiased selection:bg-orange-500/30 selection:text-orange-200">
+
+  <!-- Top Navigation Bar (Windows 11 Fluent Desktop Header) -->
+  <header class="flex flex-wrap items-center justify-between gap-y-3 gap-x-8 px-6 py-4 border-b bg-slate-950/85 border-slate-800/80">
+    <!-- Brand Lockup with Custom FoxyVPN Windows Logo -->
+    <a href="#dashboard" onclick="switchView('dashboard'); return false;" class="flex items-center gap-3 whitespace-nowrap shrink-0">
+      <div class="w-9 h-9 rounded-xl overflow-hidden shrink-0">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" class="w-full h-full">
+          <defs>
+            <linearGradient id="bgG" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#161F30" />
+              <stop offset="55%" stop-color="#0B0F17" />
+              <stop offset="100%" stop-color="#1A1215" />
+            </linearGradient>
+            <linearGradient id="foxG" x1="15%" y1="5%" x2="85%" y2="95%">
+              <stop offset="0%" stop-color="#FF854D" />
+              <stop offset="45%" stop-color="#FE6C31" />
+              <stop offset="100%" stop-color="#D9460F" />
+            </linearGradient>
+            <linearGradient id="cheekG" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" stop-color="#FFD2BE" />
+              <stop offset="100%" stop-color="#FEB798" />
+            </linearGradient>
+            <linearGradient id="winG" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#38BDF8" />
+              <stop offset="100%" stop-color="#0284C7" />
+            </linearGradient>
+          </defs>
+          <rect x="20" y="20" width="472" height="472" rx="108" fill="url(#bgG)" stroke="#263248" stroke-width="8" />
+          <path d="M256 64 L418 132 V254 C418 352 350 426 256 458 C162 426 94 352 94 254 V132 Z" fill="url(#foxG)" />
+          <path d="M256 90 L394 148 V250 C394 334 335 398 256 428 C177 398 118 334 118 250 V148 Z" fill="#161012" />
+          <path d="M144 134 L162 246 L224 198 Z" fill="url(#foxG)" />
+          <path d="M368 134 L350 246 L288 198 Z" fill="url(#foxG)" />
+          <path d="M162 246 L224 198 H288 L350 246 L326 316 L256 368 L186 316 Z" fill="url(#foxG)" />
+          <path d="M162 246 L226 292 L256 368 L178 318 Z" fill="url(#cheekG)" />
+          <path d="M350 246 L286 292 L256 368 L334 318 Z" fill="url(#cheekG)" />
+          <polygon points="198,252 226,261 208,267" fill="#38BDF8" />
+          <polygon points="314,252 286,261 304,267" fill="#38BDF8" />
+          <polygon points="240,334 272,334 256,364" fill="#161012" />
+          <g transform="translate(324, 324)">
+            <rect x="0" y="0" width="136" height="136" rx="34" fill="#0F172A" stroke="#38BDF8" stroke-width="8" />
+            <rect x="26" y="26" width="38" height="38" rx="6" fill="url(#winG)" />
+            <rect x="72" y="26" width="38" height="38" rx="6" fill="#38BDF8" />
+            <rect x="26" y="72" width="38" height="38" rx="6" fill="#0284C7" />
+            <rect x="72" y="72" width="38" height="38" rx="6" fill="url(#winG)" />
+          </g>
+        </svg>
+      </div>
+      <span class="text-base font-bold tracking-tight">FoxyVPN Windows</span>
+    </a>
+
+    <!-- Navigation Tabs -->
+    <nav class="flex items-center gap-6 text-xs sm:text-sm font-medium">
+      <button id="nav-dashboard" onclick="switchView('dashboard')" class="py-1 border-b-2 border-orange-500 text-orange-400 font-semibold cursor-pointer">
+        Dashboard
+      </button>
+      <button id="nav-auth" onclick="switchView('auth')" class="py-1 border-b-2 border-transparent text-slate-400 hover:text-slate-100 cursor-pointer">
+        Sign In / In-App Sign Up
+      </button>
+      <button id="nav-settings" onclick="switchView('settings')" class="py-1 border-b-2 border-transparent text-slate-400 hover:text-slate-100 cursor-pointer">
+        Tunnel & Anti-DPI Settings
+      </button>
+    </nav>
+
+    <!-- Primary CTA -->
+    <div>
+      <button id="top-connect-btn" onclick="toggleTunnel()" class="px-4 py-2 text-xs font-semibold rounded-xl bg-orange-500 hover:bg-orange-600 text-white transition-colors cursor-pointer">
+        Quick Connect
+      </button>
+    </div>
+  </header>
+
+  <main class="max-w-6xl mx-auto px-6 py-6 space-y-6">
+    <!-- Account Context Bar -->
+    <div class="flex flex-wrap items-center justify-between gap-4 text-xs text-slate-400">
+      <div class="flex items-center gap-2">
+        <span class="text-slate-100 font-semibold" id="active-account-label">mostafa.fxa@firefox.com</span>
+        <span>·</span>
+        <span>Mozilla Guardian 50 GB Monthly Allowance Active</span>
+        <span>·</span>
+        <button onclick="switchView('auth')" class="text-orange-400 hover:text-orange-300 underline font-medium cursor-pointer">
+          Switch or Register New Account
+        </button>
+      </div>
+      <div class="font-mono text-slate-400">
+        Ported from Vauth/FoxyVPN (Android) · Native Windows Wintun v0.14.1
+      </div>
+    </div>
+
+    <!-- VIEW 1: DASHBOARD -->
+    <div id="view-dashboard" class="space-y-6">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+        <!-- Connection Switch Card -->
+        <section class="lg:col-span-5 rounded-2xl border bg-slate-900/85 border-slate-800 p-6 flex flex-col justify-between">
+          <div class="flex items-center justify-between">
+            <div>
+              <div class="text-xs text-slate-400">Tunnel Status</div>
+              <div class="flex items-center gap-2 mt-0.5">
+                <span id="status-text" class="text-lg font-bold text-slate-200">Disconnected</span>
+                <span class="text-slate-600">·</span>
+                <span id="uptime-text" class="font-mono tabular-nums text-xs text-slate-400">00:00:00</span>
+              </div>
+            </div>
+            <div class="text-right text-xs">
+              <span class="text-slate-400">Adapter Mode</span>
+              <div id="adapter-mode-badge" class="font-mono font-semibold text-orange-400">Wintun TUN</div>
+            </div>
+          </div>
+
+          <div class="my-8 flex flex-col items-center justify-center">
+            <button id="main-power-btn" onclick="toggleTunnel()" class="w-36 h-36 rounded-full flex flex-col items-center justify-center gap-2 border-4 bg-slate-950 border-slate-700 hover:border-orange-500 text-slate-200 transition-all cursor-pointer">
+              <svg class="w-10 h-10" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 2v10m6.364-6.364a9 9 0 11-12.728 0" />
+              </svg>
+              <span id="power-btn-caption" class="text-xs font-bold tracking-wide">Tap to Connect</span>
+            </button>
+          </div>
+
+          <div class="pt-4 border-t border-slate-800 flex items-center justify-between text-xs">
+            <span class="text-slate-400">Exit IP (Cloudflare Trace):</span>
+            <span id="exit-ip-label" class="font-mono tabular-nums font-semibold text-slate-300">Not Tunneled</span>
+          </div>
+        </section>
+
+        <!-- Server & 50 GB Allowance Column -->
+        <div class="lg:col-span-7 flex flex-col justify-between gap-6">
+          <!-- Server Card -->
+          <section class="rounded-2xl border bg-slate-900/85 border-slate-800 p-6 space-y-4">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div class="flex items-center gap-3.5">
+                <span id="server-flag" class="text-3xl">🇩🇪</span>
+                <div>
+                  <div class="text-xs text-slate-400">Fastly Edge Endpoint</div>
+                  <div id="server-title" class="text-base font-bold">Germany — Frankfurt</div>
+                  <div id="server-host" class="text-xs font-mono text-slate-400">
+                    de-fra.m1.fastly-masque.net:443 · <span class="text-emerald-400">29 ms</span>
+                  </div>
+                </div>
+              </div>
+              <select id="server-picker" onchange="changeServer(this.value)" class="px-3.5 py-2.5 rounded-xl text-xs font-semibold bg-slate-950 border border-slate-700 text-slate-100 cursor-pointer">
+                <option value="DE|Germany — Frankfurt|de-fra.m1.fastly-masque.net|29|151.101.65.194|🇩🇪">🇩🇪 Germany — Frankfurt (29 ms)</option>
+                <option value="NL|Netherlands — Amsterdam|nl-ams.m1.fastly-masque.net|34|151.101.37.140|🇳🇱">🇳🇱 Netherlands — Amsterdam (34 ms)</option>
+                <option value="CH|Switzerland — Zurich|ch-zrh.m1.fastly-masque.net|37|151.101.112.88|🇨🇭">🇨🇭 Switzerland — Zurich (37 ms)</option>
+                <option value="GB|United Kingdom — London|gb-lon.m1.fastly-masque.net|44|151.101.17.209|🇬🇧">🇬🇧 United Kingdom — London (44 ms)</option>
+                <option value="US|United States — New York|us-nyc.m1.fastly-masque.net|86|151.101.1.195|🇺🇸">🇺🇸 United States — New York (86 ms)</option>
+                <option value="JP|Japan — Tokyo|jp-tyo.m1.fastly-masque.net|162|151.101.109.52|🇯🇵">🇯🇵 Japan — Tokyo (162 ms)</option>
+              </select>
+            </div>
+
+            <div class="pt-4 border-t border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div class="text-xs">
+                <span class="font-semibold">Routing Engine:</span>
+                <span id="routing-desc" class="text-slate-400"> Wintun Layer-3 Adapter (10.0.0.2/24) + DoH</span>
+              </div>
+              <div class="inline-flex p-1 rounded-xl bg-slate-950 border border-slate-800">
+                <button id="btn-mode-tun" onclick="setMode('tun')" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-orange-500 text-white cursor-pointer">
+                  Wintun Full TUN
+                </button>
+                <button id="btn-mode-proxy" onclick="setMode('proxy')" class="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200 cursor-pointer">
+                  System Proxy
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <!-- 50 GB Monthly Allowance Card -->
+          <section class="rounded-2xl border bg-slate-900/85 border-slate-800 p-6 space-y-4">
+            <div class="flex items-center justify-between">
+              <div>
+                <h3 class="text-sm font-bold">Mozilla Guardian Monthly Traffic Allowance</h3>
+                <p class="text-xs text-slate-400">Free 50 GB/month browser VPN quota · Auto-refreshes JWT ProxyPass</p>
+              </div>
+              <div class="text-right font-mono tabular-nums">
+                <span class="text-base font-bold text-orange-400">45.70 GB</span>
+                <span class="text-xs text-slate-400"> / 50 GB left</span>
+              </div>
+            </div>
+            <div class="w-full h-3 rounded-full bg-slate-950 overflow-hidden">
+              <div class="h-full bg-emerald-500" style="width: 91.4%"></div>
+            </div>
+            <div class="flex items-center justify-between text-xs text-slate-400 font-mono tabular-nums">
+              <span>Used this cycle: 4.30 GB (8.6%)</span>
+              <span>TLS Split: RECORD · DoH: 1.1.1.1</span>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <!-- Logs Console -->
+      <section class="rounded-2xl border bg-slate-900/90 border-slate-800 overflow-hidden">
+        <div class="px-6 py-3.5 border-b border-slate-800 flex items-center justify-between text-xs font-semibold">
+          <span>Wintun & Guardian Control-Plane Logs</span>
+          <span class="font-mono text-orange-400">HTTP/2 CONNECT + Fastly PoW Solver</span>
+        </div>
+        <div id="log-box" class="px-6 py-4 bg-slate-950 font-mono text-xs text-slate-300 space-y-1.5 max-h-44 overflow-y-auto">
+          <div>12:00:01 [INFO ] FoxyVPN Windows Client v1.2.0 initialized (Wails v2 + Go 1.23)</div>
+          <div>12:00:01 [INFO ] Loaded Mozilla Remote Settings topology (Fastly HTTP/2 CONNECT edge regions)</div>
+          <div>12:00:01 [INFO ] Wintun v0.14.1 driver (amd64) verified in application directory</div>
+        </div>
+      </section>
+    </div>
+
+    <!-- VIEW 2: IN-APP SIGN UP + SIGN IN + TOKEN POOL -->
+    <div id="view-auth" class="hidden">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch">
+        <div class="lg:col-span-5 rounded-2xl border bg-slate-900/75 border-slate-800 p-6 flex flex-col justify-between space-y-6">
+          <div class="space-y-4">
+            <h2 class="text-lg font-bold">In-App Registration & Sign-In</h2>
+            <p class="text-xs text-slate-300 leading-relaxed">
+              Unlike the Android version where you had to sign up in a browser first, <strong>FoxyVPN Windows</strong> integrates direct account creation (<code class="text-orange-400">POST /v1/account/create</code>) alongside Sign-In for existing accounts and Multi-Token Pool rotation.
+            </p>
+            <div class="space-y-2.5 pt-3 border-t border-slate-800 text-xs text-slate-300">
+              <div>✓ <strong>Sign In (Existing):</strong> For users who already registered a Firefox Account.</div>
+              <div>✓ <strong>Create Account (In-App):</strong> Creates a new Firefox Account, verifies the 6-digit email OTP, and calls <code class="text-emerald-400">/api/v1/fpn/activate</code> to unlock 50 GB free.</div>
+              <div>✓ <strong>Token Pool:</strong> Rotates multiple 50 GB tokens automatically on HTTP 429.</div>
+            </div>
+          </div>
+          <div class="text-xs text-slate-400 pt-4 border-t border-slate-800">
+            Fastly HTTP 406 Anti-Bot PoW Solver active automatically.
+          </div>
+        </div>
+
+        <div class="lg:col-span-7 rounded-2xl border bg-slate-900/90 border-slate-800 p-6 space-y-5">
+          <!-- 3 Auth Mode Tabs -->
+          <div class="grid grid-cols-3 gap-1 p-1 rounded-xl bg-slate-950 border border-slate-800">
+            <button id="tab-signin" onclick="setAuthTab('signin')" class="py-2 px-3 rounded-lg text-xs font-semibold bg-orange-500 text-white cursor-pointer">
+              Sign In (Existing)
+            </button>
+            <button id="tab-signup" onclick="setAuthTab('signup')" class="py-2 px-3 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200 cursor-pointer">
+              Create Account (New)
+            </button>
+            <button id="tab-token" onclick="setAuthTab('token')" class="py-2 px-3 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200 cursor-pointer">
+              Token Pool
+            </button>
+          </div>
+
+          <div id="auth-form-fields" class="space-y-4">
+            <div>
+              <label class="block text-xs font-medium mb-1.5">Firefox Account Email</label>
+              <input id="input-email" type="email" value="mostafa.fxa@firefox.com" class="w-full px-3.5 py-2.5 rounded-xl text-sm bg-slate-950 border border-slate-800 text-slate-100" />
+            </div>
+            <div>
+              <label class="block text-xs font-medium mb-1.5">Password (PBKDF2 quickStretch + HKDF)</label>
+              <input id="input-pass" type="password" value="FirefoxVpn#2026" class="w-full px-3.5 py-2.5 rounded-xl text-sm bg-slate-950 border border-slate-800 text-slate-100" />
+            </div>
+            <div id="confirm-pass-wrap" class="hidden">
+              <label class="block text-xs font-medium mb-1.5">Confirm Password (In-App Registration)</label>
+              <input type="password" value="FirefoxVpn#2026" class="w-full px-3.5 py-2.5 rounded-xl text-sm bg-slate-950 border border-slate-800 text-slate-100" />
+            </div>
+            <button onclick="submitPreviewAuth()" id="auth-submit-btn" class="w-full py-2.5 px-4 rounded-xl bg-orange-500 hover:bg-orange-600 text-white font-semibold text-sm cursor-pointer">
+              Sign In to Firefox Account
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- VIEW 3: SETTINGS -->
+    <div id="view-settings" class="hidden">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div class="p-6 rounded-2xl border bg-slate-900/85 border-slate-800 space-y-4">
+          <h3 class="text-sm font-bold text-orange-400">Windows Network Adapter & Proxy</h3>
+          <div class="text-xs text-slate-300 space-y-2">
+            <div>• <strong>Wintun Adapter Name:</strong> <code class="font-mono">FoxyVPN-Adapter</code> (IP <code class="font-mono">10.0.0.2/24</code>, MTU <code class="font-mono">1380</code>)</div>
+            <div>• <strong>Local SOCKS5 Listener:</strong> <code class="font-mono">127.0.0.1:1080</code></div>
+            <div>• <strong>Local HTTP CONNECT / WinINET:</strong> <code class="font-mono">127.0.0.1:8080</code></div>
+            <div>• <strong>Encrypted DoH DNS:</strong> <code class="font-mono">https://1.1.1.1/dns-query</code> over HTTP/2</div>
+          </div>
+        </div>
+        <div class="p-6 rounded-2xl border bg-slate-900/85 border-slate-800 space-y-4">
+          <h3 class="text-sm font-bold text-emerald-400">Anti-DPI & Censorship Circumvention</h3>
+          <div class="text-xs text-slate-300 space-y-2">
+            <div>• <strong>TLS ClientHello Fragmentation:</strong> <code class="font-mono">RECORD SPLIT</code> at SNI midpoint</div>
+            <div>• <strong>Control-Plane Upstream Proxy:</strong> Supports <code class="font-mono">socks5://</code> and <code class="font-mono">http://</code></div>
+            <div>• <strong>Custom Fastly Edge IP Override:</strong> Direct Anycast IP routing</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    let connected = false;
+    let currentServer = {
+      code: 'DE',
+      title: 'Germany — Frankfurt',
+      host: 'de-fra.m1.fastly-masque.net',
+      ping: '29',
+      ip: '151.101.65.194',
+      flag: '🇩🇪'
+    };
+
+    function switchView(view) {
+      ['dashboard', 'auth', 'settings'].forEach(v => {
+        document.getElementById('view-' + v).classList.toggle('hidden', v !== view);
+        const btn = document.getElementById('nav-' + v);
+        if (btn) {
+          btn.className = v === view
+            ? 'py-1 border-b-2 border-orange-500 text-orange-400 font-semibold cursor-pointer'
+            : 'py-1 border-b-2 border-transparent text-slate-400 hover:text-slate-100 cursor-pointer';
+        }
+      });
+    }
+
+    function addLog(msg) {
+      const box = document.getElementById('log-box');
+      const div = document.createElement('div');
+      const now = new Date().toTimeString().slice(0, 8);
+      div.textContent = `${now} [INFO ] ${msg}`;
+      box.appendChild(div);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function toggleTunnel() {
+      connected = !connected;
+      const statusText = document.getElementById('status-text');
+      const powerBtn = document.getElementById('main-power-btn');
+      const powerCap = document.getElementById('power-btn-caption');
+      const topBtn = document.getElementById('top-connect-btn');
+      const exitLabel = document.getElementById('exit-ip-label');
+
+      if (connected) {
+        statusText.textContent = 'Connected';
+        statusText.className = 'text-lg font-bold text-emerald-400';
+        powerBtn.className = 'w-36 h-36 rounded-full flex flex-col items-center justify-center gap-2 border-4 bg-emerald-500/15 border-emerald-500 text-emerald-300 shadow-lg shadow-emerald-500/15 transition-all cursor-pointer';
+        powerCap.textContent = 'Connected';
+        topBtn.textContent = 'Disconnect Tunnel';
+        topBtn.className = 'px-4 py-2 text-xs font-semibold rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white transition-colors cursor-pointer';
+        exitLabel.textContent = `${currentServer.ip} (${currentServer.code})`;
+        exitLabel.className = 'font-mono tabular-nums font-semibold text-emerald-400';
+        addLog(`Dialed Fastly edge ${currentServer.host}:443 (ALPN=h2, TLS-Split=RECORD)`);
+        addLog(`Exit verified via cloudflare.com/cdn-cgi/trace: ip=${currentServer.ip} loc=${currentServer.code}`);
+      } else {
+        statusText.textContent = 'Disconnected';
+        statusText.className = 'text-lg font-bold text-slate-200';
+        powerBtn.className = 'w-36 h-36 rounded-full flex flex-col items-center justify-center gap-2 border-4 bg-slate-950 border-slate-700 hover:border-orange-500 text-slate-200 transition-all cursor-pointer';
+        powerCap.textContent = 'Tap to Connect';
+        topBtn.textContent = 'Quick Connect';
+        topBtn.className = 'px-4 py-2 text-xs font-semibold rounded-xl bg-orange-500 hover:bg-orange-600 text-white transition-colors cursor-pointer';
+        exitLabel.textContent = 'Not Tunneled';
+        exitLabel.className = 'font-mono tabular-nums font-semibold text-slate-300';
+        addLog('Tunnel disconnected and Windows routes restored');
+      }
+    }
+
+    function changeServer(val) {
+      const [code, title, host, ping, ip, flag] = val.split('|');
+      currentServer = { code, title, host, ping, ip, flag };
+      document.getElementById('server-flag').textContent = flag;
+      document.getElementById('server-title').textContent = title;
+      document.getElementById('server-host').innerHTML = `${host}:443 · <span class="text-emerald-400">${ping} ms</span>`;
+      if (connected) {
+        document.getElementById('exit-ip-label').textContent = `${ip} (${code})`;
+        addLog(`Switched Fastly HTTP/2 edge to ${host}:443 (${title})`);
+      }
+    }
+
+    function setMode(mode) {
+      const isTun = mode === 'tun';
+      document.getElementById('btn-mode-tun').className = isTun
+        ? 'px-3 py-1.5 rounded-lg text-xs font-semibold bg-orange-500 text-white cursor-pointer'
+        : 'px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200 cursor-pointer';
+      document.getElementById('btn-mode-proxy').className = !isTun
+        ? 'px-3 py-1.5 rounded-lg text-xs font-semibold bg-orange-500 text-white cursor-pointer'
+        : 'px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200 cursor-pointer';
+      document.getElementById('adapter-mode-badge').textContent = isTun ? 'Wintun TUN' : 'WinINET Proxy';
+      document.getElementById('routing-desc').textContent = isTun
+        ? ' Wintun Layer-3 Adapter (10.0.0.2/24) + DoH'
+        : ' SOCKS5 (127.0.0.1:1080) + WinINET Registry';
+      addLog(`Switched Windows routing mode to ${isTun ? 'Wintun Full System TUN' : 'WinINET System Proxy'}`);
+    }
+
+    function setAuthTab(tab) {
+      ['signin', 'signup', 'token'].forEach(t => {
+        document.getElementById('tab-' + t).className = t === tab
+          ? 'py-2 px-3 rounded-lg text-xs font-semibold bg-orange-500 text-white cursor-pointer'
+          : 'py-2 px-3 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200 cursor-pointer';
+      });
+      document.getElementById('confirm-pass-wrap').classList.toggle('hidden', tab !== 'signup');
+      document.getElementById('auth-submit-btn').textContent =
+        tab === 'signin' ? 'Sign In to Firefox Account' :
+        tab === 'signup' ? 'Create Account & Activate 50 GB' : 'Activate Session Token Pool';
+    }
+
+    function submitPreviewAuth() {
+      const email = document.getElementById('input-email').value || 'user@firefox.com';
+      document.getElementById('active-account-label').textContent = email;
+      addLog(`Authenticated ${email} via Mozilla FxA & Guardian API (50 GB Monthly Allowance Ready)`);
+      switchView('dashboard');
+    }
+  </script>
+</body>
+</html>

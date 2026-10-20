@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Deep Dark Slate Windows 11 Squircle Base -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#161F30" />
+      <stop offset="55%" stop-color="#0B0F17" />
+      <stop offset="100%" stop-color="#1A1215" />
+    </linearGradient>
+
+    <!-- Original FoxyVPN Inspired Fiery Orange Shield Gradient -->
+    <linearGradient id="foxShieldGrad" x1="15%" y1="5%" x2="85%" y2="95%">
+      <stop offset="0%" stop-color="#FF854D" />
+      <stop offset="45%" stop-color="#FE6C31" />
+      <stop offset="100%" stop-color="#D9460F" />
+    </linearGradient>
+
+    <!-- Warm Peach / Amber Inner Fox Fur (#FEB798 from original FoxyVPN) -->
+    <linearGradient id="foxCheekGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFD2BE" />
+      <stop offset="100%" stop-color="#FEB798" />
+    </linearGradient>
+
+    <!-- Windows 11 Fluent Azure Blue Emblem Gradient -->
+    <linearGradient id="winPaneGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8" />
+      <stop offset="100%" stop-color="#0284C7" />
+    </linearGradient>
+
+    <!-- Subtle Outer Glow -->
+    <filter id="shieldGlow" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="10" stdDeviation="16" flood-color="#FE6C31" flood-opacity="0.32" />
+    </filter>
+
+    <filter id="winBadgeShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#0284C7" flood-opacity="0.45" />
+    </filter>
+  </defs>
+
+  <!-- Squircle Desktop Icon Container -->
+  <rect x="20" y="20" width="472" height="472" rx="108" fill="url(#bgGrad)" stroke="#263248" stroke-width="4" />
+
+  <!-- Subtle Fluent Grid Lines inside Icon Background -->
+  <path d="M256 44 V468 M44 256 H468" stroke="#ffffff" stroke-opacity="0.03" stroke-width="2" />
+
+  <!-- Main Outer Cyber Shield (FoxyVPN Signature Silhouette) -->
+  <g filter="url(#shieldGlow)">
+    <path
+      d="M256 64
+         L418 132
+         V254
+         C418 352 350 426 256 458
+         C162 426 94 352 94 254
+         V132
+         Z"
+      fill="url(#foxShieldGrad)"
+    />
+    <!-- Inner Shield Dark Espresso Cutout (#1E1310 from original FoxyVPN) -->
+    <path
+      d="M256 90
+         L394 148
+         V250
+         C394 334 335 398 256 428
+         C177 398 118 334 118 250
+         V148
+         Z"
+      fill="#161012"
+    />
+  </g>
+
+  <!-- Geometric Fox Head Inside the Shield -->
+  <!-- Left & Right Fox Ears -->
+  <path d="M144 134 L162 246 L224 198 Z" fill="url(#foxShieldGrad)" />
+  <path d="M368 134 L350 246 L288 198 Z" fill="url(#foxShieldGrad)" />
+
+  <!-- Inner Ear Triangles -->
+  <path d="M158 158 L170 228 L206 198 Z" fill="#1E1310" />
+  <path d="M354 158 L342 228 L306 198 Z" fill="#1E1310" />
+
+  <!-- Fox Forehead & Brow Geometry -->
+  <path
+    d="M162 246
+       L224 198
+       H288
+       L350 246
+       L326 316
+       L256 368
+       L186 316
+       Z"
+    fill="url(#foxShieldGrad)"
+  />
+
+  <!-- Fox Lower Cheeks (Signature #FEB798 Peach Highlight) -->
+  <path
+    d="M162 246
+       L226 292
+       L256 368
+       L178 318
+       Z"
+    fill="url(#foxCheekGrad)"
+  />
+  <path
+    d="M350 246
+       L286 292
+       L256 368
+       L334 318
+       Z"
+    fill="url(#foxCheekGrad)"
+  />
+
+  <!-- Fox Eyes (Glowing Cyber Slits) -->
+  <polygon points="192,248 232,262 206,272" fill="#161012" />
+  <polygon points="320,248 280,262 306,272" fill="#161012" />
+  <polygon points="198,252 226,261 208,267" fill="#38BDF8" />
+  <polygon points="314,252 286,261 304,267" fill="#38BDF8" />
+
+  <!-- Fox Nose Tip -->
+  <polygon points="240,334 272,334 256,364" fill="#161012" />
+
+  <!-- Windows 11 Fluent 4-Pane Badge Integrated at Bottom-Right Corner -->
+  <g filter="url(#winBadgeShadow)" transform="translate(324, 324)">
+    <rect x="0" y="0" width="136" height="136" rx="34" fill="#0F172A" stroke="#38BDF8" stroke-width="4" />
+    <!-- 4 Windows 11 Panes -->
+    <rect x="26" y="26" width="38" height="38" rx="6" fill="url(#winPaneGrad)" />
+    <rect x="72" y="26" width="38" height="38" rx="6" fill="#38BDF8" />
+    <rect x="26" y="72" width="38" height="38" rx="6" fill="#0284C7" />
+    <rect x="72" y="72" width="38" height="38" rx="6" fill="url(#winPaneGrad)" />
+  </g>
+</svg>
