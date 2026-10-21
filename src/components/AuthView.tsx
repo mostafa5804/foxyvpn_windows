@@ -12,6 +12,7 @@ import {
   Layers,
   ExternalLink,
   RefreshCw,
+  Link2,
 } from 'lucide-react';
 import {
   validateAuthInput,
@@ -34,6 +35,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, isDark }) =
   const [verificationCode, setVerificationCode] = useState('');
   const [tokenPoolText, setTokenPoolText] = useState('');
   const [loading, setLoading] = useState(false);
+  const [checkingBrowser, setCheckingBrowser] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [statusBanner, setStatusBanner] = useState<string | null>(null);
   const [showBrowserFallbackModal, setShowBrowserFallbackModal] = useState(false);
@@ -51,7 +53,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, isDark }) =
     });
 
     if (!validation.valid) {
-      setErrorMsg(validation.error || 'Invalid input');
+      setErrorMsg(validation.error || 'اطلاعات واردشده نامعتبر است');
       return;
     }
 
@@ -68,7 +70,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, isDark }) =
         const resp = await vpnBridge.registerAccount(email.trim(), password);
         if (resp.requiresVerification) {
           setStatusBanner(
-            `Account created for ${email.trim()}. Enter the 6-digit verification code sent to your email to activate your 50 GB monthly allowance.`
+            `اکانت فایرفاکس ساخته شد. موزیلا یک ایمیل تایید به ${email.trim()} ارسال کرد. شما می‌توانید لینک داخل ایمیل را در مرورگر باز کنید یا لینک/کد را در کادر زیر قرار دهید.`
           );
           setStep('verify');
         } else {
@@ -78,7 +80,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, isDark }) =
         const resp = await vpnBridge.login(email.trim(), password);
         if (resp.requiresVerification) {
           setStatusBanner(
-            `Firefox Accounts sent a 6-digit security code to ${email.trim()} (verificationMethod: email-2fa).`
+            `کد تایید امنیتی به ایمیل ${email.trim()} ارسال شد. کد ۶ رقمی را وارد کنید.`
           );
           setStep('verify');
         } else {
@@ -86,7 +88,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, isDark }) =
         }
       }
     } catch (err: unknown) {
-      setErrorMsg(err instanceof Error ? err.message : 'Authentication request failed');
+      setErrorMsg(err instanceof Error ? err.message : 'خطا در ارتباط با سرور فایرفاکس');
     } finally {
       setLoading(false);
     }
@@ -98,7 +100,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, isDark }) =
 
     const validation = validateAuthInput('verify', { code: verificationCode });
     if (!validation.valid) {
-      setErrorMsg(validation.error || 'Invalid 6-digit code');
+      setErrorMsg(validation.error || 'کد ۶ رقمی یا لینک تایید را وارد کنید');
       return;
     }
 
@@ -107,9 +109,26 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, isDark }) =
       const user = await vpnBridge.verifyEmailCode(verificationCode.trim());
       onAuthenticated(user);
     } catch (err: unknown) {
-      setErrorMsg(err instanceof Error ? err.message : 'Verification code rejected');
+      setErrorMsg(err instanceof Error ? err.message : 'کد یا لینک تایید مورد پذیرش قرار نگرفت');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleBrowserLinkClicked = async () => {
+    setErrorMsg(null);
+    setCheckingBrowser(true);
+    try {
+      const user = await vpnBridge.verifyEmailCode('LINK_CLICKED');
+      onAuthenticated(user);
+    } catch (err: unknown) {
+      setErrorMsg(
+        err instanceof Error
+          ? err.message
+          : 'هنوز تایید در فایرفاکس تکمیل نشده است. لطفاً لینک ایمیل را در مرورگر باز کنید یا آدرس آن را در کادر بالا Paste کنید.'
+      );
+    } finally {
+      setCheckingBrowser(false);
     }
   };
 
@@ -123,7 +142,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, isDark }) =
   };
 
   return (
-    <div className="w-full max-w-4xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch py-6">
+    <div className="w-full max-w-4xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch py-4">
       {/* Left Column: Protocol Architecture & 50 GB Allowance Overview */}
       <div
         className={`lg:col-span-5 rounded-2xl p-6 flex flex-col justify-between border ${
@@ -135,13 +154,17 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, isDark }) =
         <div className="space-y-6">
           <div className="flex items-center gap-3.5">
             <img
-              src="/foxyvpn-windows-logo.svg"
+              src="/appicon.png"
               alt="FoxyVPN Windows Logo"
-              referrerPolicy="no-referrer"
-              className="w-12 h-12 rounded-xl shrink-0"
+              className="w-12 h-12 rounded-xl shrink-0 border border-slate-800"
             />
             <div>
-              <h1 className="text-lg font-bold tracking-tight">FoxyVPN Windows</h1>
+              <div className="flex items-center gap-2">
+                <h1 className="text-base font-bold tracking-tight">FoxyVPN Windows</h1>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-400 font-semibold">
+                  v1.0.2
+                </span>
+              </div>
               <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
                 Ported from Vauth/FoxyVPN · Fastly HTTP/2 · Wintun
               </p>
@@ -149,65 +172,55 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, isDark }) =
           </div>
 
           <div className="space-y-3">
-            <h2 className="text-xl font-semibold tracking-tight leading-snug">
-              50 GB Free Monthly VPN Traffic via Firefox Account
+            <h2 className="text-lg font-semibold tracking-tight leading-snug">
+              سهمیه ۵۰ گیگابایت ترافیک ماهانه رایگان با اکانت فایرفاکس
             </h2>
-            <p className={`text-sm leading-relaxed ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
-              Sign in with an existing Firefox account or register a new account directly inside the client.
-              FoxyVPN automatically activates your free 50 GB monthly browser VPN entitlement on{' '}
-              <code className="font-mono text-xs text-orange-400">vpn.mozilla.org</code>.
+            <p className={`text-xs leading-relaxed ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
+              با اکانت قبلی فایرفاکس وارد شوید یا مستقیماً از داخل برنامه اکانت بسازید. سهمیه ۵۰ گیگابایت ماهانه موزیلا به صورت خودکار فعال می‌شود.
             </p>
           </div>
 
-          <div className={`space-y-3 pt-4 border-t ${isDark ? 'border-slate-800' : 'border-slate-200'}`}>
+          <div className={`space-y-3 pt-3 border-t ${isDark ? 'border-slate-800' : 'border-slate-200'}`}>
             <div className="flex items-start gap-2.5 text-xs">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
               <div>
-                <span className="font-semibold">In-App Registration & Sign-In</span>
+                <span className="font-semibold">ورود با اکانت قبلی (پیشنهادی)</span>
                 <p className={isDark ? 'text-slate-400' : 'text-slate-500'}>
-                  PBKDF2 quickStretch + HKDF key derivation & Fastly 406 PoW solver built in.
+                  کافیست در تب Sign In مشخصات اکانت فایرفاکس خود را وارد کنید تا کد ۶ رقمی ایمیل شود.
                 </p>
               </div>
             </div>
             <div className="flex items-start gap-2.5 text-xs">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
               <div>
-                <span className="font-semibold">Full System Wintun TUN + WinINET Proxy</span>
+                <span className="font-semibold">ثبت‌نام مستقیم و تایید لینک ایمیل</span>
                 <p className={isDark ? 'text-slate-400' : 'text-slate-500'}>
-                  Layer-3 virtual adapter (<span className="font-mono">10.0.0.2/24</span>) with DoH DNS & TLS SNI fragmentation.
+                  برای اکانت جدید، موزیلا لینک فعال‌سازی ایمیل می‌کند؛ می‌توانید لینک را در کادر Paste کنید یا در مرورگر باز نمایید.
                 </p>
               </div>
             </div>
             <div className="flex items-start gap-2.5 text-xs">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
               <div>
-                <span className="font-semibold">Multi-Account Token Pool Rotation</span>
+                <span className="font-semibold">استخر چند اکانته (Token Pool)</span>
                 <p className={isDark ? 'text-slate-400' : 'text-slate-500'}>
-                  Automatically rotates session tokens when a 50 GB monthly cap reaches 100%.
+                  سوئیچ نامحسوس به اکانت بعدی با اتمام هر سهمیه ۵۰ گیگابایتی بدون قطعی اینترنت.
                 </p>
               </div>
             </div>
           </div>
         </div>
 
-        <div className={`pt-6 mt-6 border-t text-xs space-y-2 ${isDark ? 'border-slate-800 text-slate-400' : 'border-slate-200 text-slate-500'}`}>
+        <div className={`pt-4 mt-6 border-t text-xs space-y-2 ${isDark ? 'border-slate-800 text-slate-400' : 'border-slate-200 text-slate-500'}`}>
           <div className="flex items-center justify-between">
-            <span>Quick Test Presets:</span>
+            <span>تست دمو سریع:</span>
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => fillDemoAccount('signin')}
                 className="text-orange-400 hover:text-orange-300 font-medium underline cursor-pointer"
               >
-                Fill Existing Account
-              </button>
-              <span>·</span>
-              <button
-                type="button"
-                onClick={() => fillDemoAccount('signup')}
-                className="text-emerald-400 hover:text-emerald-300 font-medium underline cursor-pointer"
-              >
-                Fill New Sign-Up
+                اکانت نمونه
               </button>
             </div>
           </div>
@@ -249,7 +262,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, isDark }) =
                 }`}
               >
                 <LogIn className="w-3.5 h-3.5" />
-                <span>Sign In (Existing)</span>
+                <span>ورود با اکانت قبلی</span>
               </button>
 
               <button
@@ -269,7 +282,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, isDark }) =
                 }`}
               >
                 <UserPlus className="w-3.5 h-3.5" />
-                <span>Create Account</span>
+                <span>ساخت اکانت جدید</span>
               </button>
 
               <button
@@ -315,13 +328,40 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, isDark }) =
             <form onSubmit={handleCredentialsSubmit} className="space-y-4">
               {authTab !== 'token' ? (
                 <>
+                  {authTab === 'signup' && (
+                    <div
+                      className={`p-3.5 rounded-xl border text-xs leading-relaxed space-y-2 ${
+                        isDark
+                          ? 'bg-orange-500/10 border-orange-500/25 text-orange-200'
+                          : 'bg-orange-50 border-orange-200 text-orange-950'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 font-semibold text-orange-400">
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        <span>راهنمای ساخت اکانت جدید موزیلا</span>
+                      </div>
+                      <p className="text-[11px]">
+                        موزیلا برای اکانت‌های جدید لینک تایید ایمیل ارسال می‌کند. توصیه می‌شود ابتدا در وبسایت رسمی ثبت‌نام کرده، لینک فعال‌سازی ایمیل را باز کنید و سپس از تب <strong>«ورود با اکانت قبلی»</strong> وارد شوید:
+                      </p>
+                      <a
+                        href="https://accounts.firefox.com/signup"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-500 hover:bg-orange-600 text-white font-medium text-xs transition-colors shadow-sm"
+                      >
+                        <span>باز کردن صفحه ثبت‌نام موزیلا در مرورگر</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+                  )}
+
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
                       <label htmlFor="fxa-email" className="text-xs font-medium">
-                        Firefox Account Email
+                        ایمیل اکانت فایرفاکس (Firefox Account Email)
                       </label>
-                      <span className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                        {authTab === 'signup' ? 'New account registration' : 'Already registered account'}
+                      <span className={`text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                        {authTab === 'signup' ? 'ساخت اکانت جدید' : 'اکانت از قبل ثبت‌شده'}
                       </span>
                     </div>
                     <div className="relative">
@@ -343,7 +383,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, isDark }) =
 
                   <div>
                     <label htmlFor="fxa-password" className="block text-xs font-medium mb-1.5">
-                      Password
+                      رمز عبور (Password)
                     </label>
                     <div className="relative">
                       <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
@@ -352,7 +392,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, isDark }) =
                         type="password"
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
-                        placeholder="Minimum 8 characters"
+                        placeholder="حداقل ۸ کاراکتر"
                         className={`w-full pl-10 pr-4 py-2.5 rounded-xl text-sm border focus:outline-none focus:ring-2 focus:ring-orange-500/50 ${
                           isDark
                             ? 'bg-slate-950 border-slate-800 text-slate-100 placeholder:text-slate-500'
@@ -365,7 +405,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, isDark }) =
                   {authTab === 'signup' && (
                     <div>
                       <label htmlFor="fxa-confirm-password" className="block text-xs font-medium mb-1.5">
-                        Confirm Password
+                        تکرار رمز عبور (Confirm Password)
                       </label>
                       <div className="relative">
                         <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
@@ -374,7 +414,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, isDark }) =
                           type="password"
                           value={confirmPassword}
                           onChange={(e) => setConfirmPassword(e.target.value)}
-                          placeholder="Re-enter password"
+                          placeholder="تکرار همان رمز عبور"
                           className={`w-full pl-10 pr-4 py-2.5 rounded-xl text-sm border focus:outline-none focus:ring-2 focus:ring-orange-500/50 ${
                             isDark
                               ? 'bg-slate-950 border-slate-800 text-slate-100 placeholder:text-slate-500'
@@ -389,7 +429,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, isDark }) =
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
                     <label htmlFor="fxa-token-pool" className="text-xs font-medium">
-                      Session Token Pool (One Hex Token per Line)
+                      استخر توکن نشست (Session Token Pool)
                     </label>
                     <button
                       type="button"
@@ -400,7 +440,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, isDark }) =
                       }
                       className="text-xs text-orange-400 hover:text-orange-300 underline cursor-pointer"
                     >
-                      Insert Sample Pool (100 GB Total)
+                      نمونه توکن (100 GB)
                     </button>
                   </div>
                   <textarea
@@ -408,7 +448,7 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, isDark }) =
                     rows={5}
                     value={tokenPoolText}
                     onChange={(e) => setTokenPoolText(e.target.value)}
-                    placeholder="Paste 64-character hex sessionToken(s)..."
+                    placeholder="توکن‌های هگزادسیمال ۶۴ کاراکتری sessionToken..."
                     className={`w-full p-3 rounded-xl font-mono text-xs border focus:outline-none focus:ring-2 focus:ring-orange-500/50 ${
                       isDark
                         ? 'bg-slate-950 border-slate-800 text-slate-100 placeholder:text-slate-600'
@@ -426,16 +466,16 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, isDark }) =
                 {loading ? (
                   <>
                     <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>Communicating with Mozilla FxA...</span>
+                    <span>ارتباط با سرورهای فایرفاکس...</span>
                   </>
                 ) : (
                   <>
                     <span>
                       {authTab === 'signin'
-                        ? 'Sign In to Firefox Account'
+                        ? 'ورود به اکانت فایرفاکس'
                         : authTab === 'signup'
-                        ? 'Create Account & Activate 50 GB'
-                        : 'Activate Session Token Pool'}
+                        ? 'ثبت‌نام اکانت جدید و فعال‌سازی ۵۰ گیگابایت'
+                        : 'فعال‌سازی استخر توکن'}
                     </span>
                     <ArrowRight className="w-4 h-4" />
                   </>
@@ -443,63 +483,92 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, isDark }) =
               </button>
             </form>
           ) : (
-            <form onSubmit={handleVerifySubmit} className="space-y-4">
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label htmlFor="fxa-otp-code" className="text-xs font-medium">
-                    6-Digit Email Confirmation Code
-                  </label>
+            <div className="space-y-4">
+              <form onSubmit={handleVerifySubmit} className="space-y-3">
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label htmlFor="fxa-otp-code" className="text-xs font-medium">
+                      کد تایید ۶ رقمی یا لینک تایید ایمیل
+                    </label>
+                    <span className="text-[11px] text-slate-400">
+                      پشتیبانی از کد ۶ رقمی یا Paste لینک
+                    </span>
+                  </div>
+                  <div className="relative">
+                    <KeyRound className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      id="fxa-otp-code"
+                      type="text"
+                      value={verificationCode}
+                      onChange={(e) => setVerificationCode(e.target.value.trim())}
+                      placeholder="کد ۶ رقمی (مثل 482910) یا لینک ایمیل (https://...)"
+                      className={`w-full pl-10 pr-4 py-2.5 rounded-xl font-mono text-sm border focus:outline-none focus:ring-2 focus:ring-orange-500/50 ${
+                        isDark
+                          ? 'bg-slate-950 border-slate-800 text-slate-100'
+                          : 'bg-slate-50 border-slate-300 text-slate-900'
+                      }`}
+                    />
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-1.5 leading-normal">
+                    💡 نکته: اگر لینک داخل ایمیل برایتان آمده، می‌توانید آدرس لینک را Copy کرده و مستقیماً در این کادر Paste نمایید.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-3">
                   <button
                     type="button"
-                    onClick={() => setVerificationCode('482910')}
-                    className="text-xs text-orange-400 hover:text-orange-300 underline cursor-pointer"
+                    onClick={() => {
+                      setStep('credentials');
+                      setErrorMsg(null);
+                    }}
+                    className={`py-2 px-3 rounded-xl text-xs font-semibold border cursor-pointer ${
+                      isDark
+                        ? 'border-slate-700 text-slate-300 hover:bg-slate-800'
+                        : 'border-slate-300 text-slate-700 hover:bg-slate-100'
+                    }`}
                   >
-                    Fill Demo OTP (482910)
+                    بازگشت
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={loading || !verificationCode}
+                    className="flex-1 py-2 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>تایید کد و بازگشایی ۵۰ گیگابایت VPN</span>
                   </button>
                 </div>
-                <div className="relative">
-                  <KeyRound className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                  <input
-                    id="fxa-otp-code"
-                    type="text"
-                    maxLength={6}
-                    value={verificationCode}
-                    onChange={(e) => setVerificationCode(e.target.value.replace(/\D/g, ''))}
-                    placeholder="482910"
-                    className={`w-full pl-10 pr-4 py-2.5 rounded-xl font-mono text-base tracking-widest border focus:outline-none focus:ring-2 focus:ring-orange-500/50 ${
-                      isDark
-                        ? 'bg-slate-950 border-slate-800 text-slate-100'
-                        : 'bg-slate-50 border-slate-300 text-slate-900'
-                    }`}
-                  />
-                </div>
-              </div>
+              </form>
 
-              <div className="flex items-center gap-3">
+              {/* Alternative 1-click option if the user opened the link in Firefox or any browser */}
+              <div className={`p-3.5 rounded-xl border space-y-2 text-xs ${isDark ? 'bg-slate-950/70 border-slate-800' : 'bg-slate-50 border-slate-200'}`}>
+                <div className="flex items-center gap-2 text-orange-400 font-semibold">
+                  <Link2 className="w-4 h-4" />
+                  <span>اگر لینک ایمیل را در مرورگر یا گوشی باز کردید:</span>
+                </div>
+                <p className={`text-[11px] leading-relaxed ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                  نیازی به وارد کردن کد نیست! کافیست دکمهٔ زیر را بزنید تا برنامه تایید شدن نشست در سرور موزیلا را به صورت خودکار بررسی و شما را وارد کند:
+                </p>
                 <button
                   type="button"
-                  onClick={() => {
-                    setStep('credentials');
-                    setErrorMsg(null);
-                  }}
-                  className={`py-2.5 px-4 rounded-xl text-xs font-semibold border cursor-pointer ${
-                    isDark
-                      ? 'border-slate-700 text-slate-300 hover:bg-slate-800'
-                      : 'border-slate-300 text-slate-700 hover:bg-slate-100'
-                  }`}
+                  onClick={handleBrowserLinkClicked}
+                  disabled={checkingBrowser}
+                  className="w-full py-2 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 font-medium text-xs border border-cyan-500/30 flex items-center justify-center gap-2 cursor-pointer transition-colors"
                 >
-                  Back
-                </button>
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="flex-1 py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm flex items-center justify-center gap-2 transition-colors cursor-pointer"
-                >
-                  <CheckCircle2 className="w-4 h-4" />
-                  <span>Verify Code & Unlock 50 GB VPN</span>
+                  {checkingBrowser ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>بررسی وضعیت تایید در سرور فایرفاکس...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>لینک ایمیل را در مرورگر باز کردم — ادامه و ورود خودکار</span>
+                    </>
+                  )}
                 </button>
               </div>
-            </form>
+            </div>
           )}
         </div>
 
@@ -509,65 +578,18 @@ export const AuthView: React.FC<AuthViewProps> = ({ onAuthenticated, isDark }) =
             isDark ? 'border-slate-800 text-slate-400' : 'border-slate-200 text-slate-500'
           }`}
         >
-          <span>Need Mozilla's web portal instead?</span>
-          <button
-            type="button"
-            onClick={() => setShowBrowserFallbackModal(true)}
+          <span>ثبت‌نام مستقیم در سایت فایرفاکس:</span>
+          <a
+            href="https://accounts.firefox.com/signup"
+            target="_blank"
+            rel="noopener noreferrer"
             className="inline-flex items-center gap-1.5 text-orange-400 hover:text-orange-300 font-medium cursor-pointer"
           >
-            <span>Open Mozilla Web Sign-Up Helper</span>
+            <span>accounts.firefox.com/signup</span>
             <ExternalLink className="w-3.5 h-3.5" />
-          </button>
+          </a>
         </div>
       </div>
-
-      {/* Embedded Mozilla Web Registration Instructions Modal */}
-      {showBrowserFallbackModal && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="web-signup-modal-title"
-          className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
-        >
-          <div
-            className={`w-full max-w-lg rounded-2xl p-6 border space-y-4 ${
-              isDark ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-slate-200 text-slate-900'
-            }`}
-          >
-            <div className="flex items-center justify-between">
-              <h3 id="web-signup-modal-title" className="text-base font-bold">
-                Mozilla Account Registration Options
-              </h3>
-              <button
-                type="button"
-                onClick={() => setShowBrowserFallbackModal(false)}
-                className="text-xs px-2.5 py-1 rounded-lg border border-slate-700 hover:bg-slate-800 cursor-pointer"
-              >
-                Close
-              </button>
-            </div>
-            <p className={`text-xs leading-relaxed ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
-              FoxyVPN supports direct in-app registration via{' '}
-              <code className="font-mono text-orange-400">POST /v1/account/create</code>. If Mozilla enforces an
-              interactive web CAPTCHA on your current IP, you can either configure an upstream control-plane proxy in
-              Settings or register at <code className="font-mono">https://accounts.firefox.com/signup</code> and sign
-              in under the <strong>Sign In (Existing)</strong> tab.
-            </p>
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowBrowserFallbackModal(false);
-                  setAuthTab('signup');
-                }}
-                className="px-4 py-2 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-semibold cursor-pointer"
-              >
-                Use In-App Registration Tab
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

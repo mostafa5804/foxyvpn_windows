@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,31 +18,60 @@ import (
 	"time"
 
 	"golang.org/x/net/http2"
+	"golang.org/x/net/proxy"
 )
 
 const (
-	defaultWriteBufSize = 1 << 20 // 1 MB tunnel write buffer
-	keepAliveInterval   = 15 * time.Second
-	keepAliveTimeout    = 7 * time.Second
 	defaultExitCheckURL = "https://www.cloudflare.com/cdn-cgi/trace"
+	keepAliveInterval   = 15 * time.Second
+	keepAliveTimeout    = 15 * time.Second
 )
 
-// TunnelConfig configures the HTTP/2 upstream tunnel, local proxy, and Wintun adapter.
-type TunnelConfig struct {
-	EdgeHost       string `json:"edgeHost"`
-	EdgePort       int    `json:"edgePort"`
-	EdgeOverrideIP string `json:"edgeOverrideIp"`
-	BearerToken    string `json:"bearerToken"`
-	Mode           string `json:"mode"`         // "tun" | "proxy"
-	TlsSplitMode   string `json:"tlsSplitMode"` // "off" | "tcp" | "record"
-	DohProvider    string `json:"dohProvider"`  // "1.1.1.1" | "8.8.8.8" | "9.9.9.9"
-	MTU            int    `json:"mtu"`
-	KillSwitch     bool   `json:"killSwitch"`
-	SocksListen    string `json:"socksListen"`
-	HttpListen     string `json:"httpListen"`
+// Fallback European/Regional Fastly MASQUE edge nodes (Port 2499) from Mozilla Remote Settings
+// Fallback European/Regional Fastly MASQUE edge nodes (Port 2499) from Mozilla Remote Settings
+// used automatically when the primary edge IP/host is filtered by the local ISP.
+var fallbackEdgeHosts = []string{
+	"muc139.m1.fastly-masque.net",  // Germany (Munich - 23.235.42.8)
+	"ehrd229.m1.fastly-masque.net", // Netherlands (Rotterdam - 23.235.42.17)
+	"vie63.m1.fastly-masque.net",   // Austria (Vienna - 23.235.42.31)
+	"lfpb115.m1.fastly-masque.net", // France (Paris - 23.235.42.9)
+	"bru148.m1.fastly-masque.net",  // Belgium (Brussels - 151.101.37.140)
+	"eglc860.m1.fastly-masque.net", // UK (London - 151.101.17.209)
+	"hel141.m1.fastly-masque.net",  // Finland (Helsinki - 151.101.112.88)
+	"essb127.m1.fastly-masque.net", // Sweden (Stockholm - 151.101.85.77)
+	"zrh.m1.fastly-masque.net",     // Switzerland (Zurich)
 }
 
-// ExitCheckResult holds the verified public IP, country code, and latency through the tunnel.
+// Known clean Fastly Anycast IPs that serve *.m1.fastly-masque.net on port 2499
+var cleanFastlyEdgeIPs = []string{
+	"23.235.42.8",
+	"23.235.42.17",
+	"23.235.42.31",
+	"23.235.42.9",
+	"151.101.37.140",
+	"151.101.17.209",
+	"151.101.112.88",
+	"151.101.85.77",
+	"23.235.42.11",
+}
+
+// TunnelConfig configures the HTTP/2 CONNECT tunnel engine and Wintun/Proxy mode.
+type TunnelConfig struct {
+	EdgeHost       string // e.g., "muc139.m1.fastly-masque.net"
+	EdgePort       int    // default 2499
+	EdgeOverrideIP string // optional clean Fastly edge IP override
+	BearerToken    string // short-lived Guardian ProxyPass JWT
+	Mode           string // "tun" (Wintun + System Proxy) or "proxy" (SOCKS5 + WinINET)
+	TlsSplitMode   string // "sni" (default) | "first-byte" | "off"
+	DohProvider    string // "1.1.1.1" | "8.8.8.8" | "9.9.9.9"
+	MTU            int    // default 1380
+	KillSwitch     bool
+	UpstreamProxy  string // optional socks5://127.0.0.1:10808 or http://127.0.0.1:7890
+	SocksListen    string // default "127.0.0.1:1080"
+	HttpListen     string // default "127.0.0.1:8080"
+}
+
+// ExitCheckResult holds the verified public exit IP and country code.
 type ExitCheckResult struct {
 	IP          string `json:"ip"`
 	CountryCode string `json:"countryCode"`
@@ -49,7 +79,7 @@ type ExitCheckResult struct {
 	Verified    bool   `json:"verified"`
 }
 
-// Engine manages the active HTTP/2 session, local SOCKS5/HTTP listeners, Wintun adapter, and traffic telemetry.
+// Engine manages the active HTTP/2 Fastly session, local SOCKS5/HTTP listeners, and Windows Wintun adapter.
 type Engine struct {
 	mu            sync.RWMutex
 	cfg           TunnelConfig
@@ -57,16 +87,17 @@ type Engine struct {
 	socksListener net.Listener
 	httpListener  net.Listener
 	wintunAdapter *WintunController
-	stopCh        chan struct{}
+	connectedAt   time.Time
 	running       atomic.Bool
 	txBytes       atomic.Int64
 	rxBytes       atomic.Int64
 	lastPingMs    atomic.Int64
-	connectedAt   time.Time
 	exitInfo      ExitCheckResult
 	logFunc       func(level, msg string)
+	stopCh        chan struct{}
 }
 
+// NewEngine creates a new VPN Tunnel Engine.
 func NewEngine(logFn func(level, msg string)) *Engine {
 	return &Engine{
 		logFunc: logFn,
@@ -79,7 +110,7 @@ func (e *Engine) log(level, format string, args ...any) {
 	}
 }
 
-// Start establishes the HTTP/2 session to the Fastly edge node and starts either Wintun TUN or System Proxy mode.
+// Start establishes the HTTP/2 session to the Fastly edge node and starts Wintun TUN + System Proxy mode.
 func (e *Engine) Start(ctx context.Context, cfg TunnelConfig) error {
 	e.mu.Lock()
 	if e.running.Load() {
@@ -87,8 +118,9 @@ func (e *Engine) Start(ctx context.Context, cfg TunnelConfig) error {
 		_ = e.Stop()
 		e.mu.Lock()
 	}
-	if cfg.EdgePort == 0 {
-		cfg.EdgePort = 443
+	if cfg.EdgePort == 0 || cfg.EdgePort == 443 {
+		// Mozilla Fastly MASQUE/CONNECT edge nodes listen on port 2499
+		cfg.EdgePort = 2499
 	}
 	if cfg.SocksListen == "" {
 		cfg.SocksListen = "127.0.0.1:1080"
@@ -109,13 +141,13 @@ func (e *Engine) Start(ctx context.Context, cfg TunnelConfig) error {
 	e.exitInfo = ExitCheckResult{}
 	e.mu.Unlock()
 
-	e.log("INFO", "Dialing Fastly HTTP/2 edge %s:%d (TLS Split: %s)...", cfg.EdgeHost, cfg.EdgePort, cfg.TlsSplitMode)
 	dialStart := time.Now()
-	sess, err := NewH2Session(cfg, &e.txBytes, &e.rxBytes, e.log)
+	sess, connectedHost, err := EstablishSmartH2Session(ctx, cfg, &e.txBytes, &e.rxBytes, e.log)
 	if err != nil {
 		return fmt.Errorf("establishing HTTP/2 edge session: %w", err)
 	}
 	e.lastPingMs.Store(time.Since(dialStart).Milliseconds())
+	e.log("INFO", "Connected to Fastly HTTP/2 edge %s (%dms)", connectedHost, e.lastPingMs.Load())
 
 	e.mu.Lock()
 	e.session = sess
@@ -142,22 +174,21 @@ func (e *Engine) Start(ctx context.Context, cfg TunnelConfig) error {
 	go e.acceptHTTPProxyLoop(httpLn)
 	e.log("INFO", "Local HTTP CONNECT proxy listening on %s", cfg.HttpListen)
 
+	// Always enable Windows System Proxy (WinINET -> 127.0.0.1:8080) so browsers & apps tunnel traffic without routing loops
+	if proxyErr := SetWindowsSystemProxy(cfg.HttpListen); proxyErr != nil {
+		e.log("WARN", "Setting Windows WinINET proxy warning: %v", proxyErr)
+	} else {
+		e.log("INFO", "Enabled Windows System Proxy -> %s (SOCKS5 on %s)", cfg.HttpListen, cfg.SocksListen)
+	}
+
 	if strings.EqualFold(cfg.Mode, "tun") {
 		e.log("INFO", "Initializing Wintun virtual adapter 'FoxyVPN-Adapter' (MTU %d)...", cfg.MTU)
 		wt, err := StartWintunAdapter(cfg, e)
 		if err != nil {
-			e.log("WARN", "Wintun initialization failed (%v); falling back to Windows System Proxy mode", err)
-			if proxyErr := SetWindowsSystemProxy(cfg.HttpListen); proxyErr != nil {
-				e.log("WARN", "Setting Windows WinINET proxy warning: %v", proxyErr)
-			}
+			e.log("WARN", "Wintun adapter note (%v); continuing with System Proxy + SOCKS5 tunnel", err)
 		} else {
 			e.wintunAdapter = wt
-			e.log("INFO", "Wintun adapter 'FoxyVPN-Adapter' active (IP 10.0.0.2/24, Gateway 10.0.0.1, DoH %s)", cfg.DohProvider)
-		}
-	} else {
-		e.log("INFO", "Enabling Windows WinINET System Proxy -> %s", cfg.HttpListen)
-		if err := SetWindowsSystemProxy(cfg.HttpListen); err != nil {
-			e.log("WARN", "WinINET registry update warning: %v", err)
+			e.log("INFO", "Wintun adapter 'FoxyVPN-Adapter' active (IP 10.0.0.2/24, DoH %s)", cfg.DohProvider)
 		}
 	}
 
@@ -166,7 +197,7 @@ func (e *Engine) Start(ctx context.Context, cfg TunnelConfig) error {
 
 	// Perform non-fatal exit verification probe in background
 	go func() {
-		res, err := e.VerifyExit(10 * time.Second)
+		res, err := e.VerifyExit(12 * time.Second)
 		if err != nil {
 			e.log("WARN", "Exit verification probe warning: %v", err)
 			return
@@ -204,7 +235,7 @@ func (e *Engine) Stop() error {
 		close(e.stopCh)
 	}
 	if e.wintunAdapter != nil {
-		e.log("INFO", "Closing Wintun adapter and restoring Windows default routes...")
+		e.log("INFO", "Closing Wintun adapter...")
 		_ = e.wintunAdapter.Close()
 		e.wintunAdapter = nil
 	}
@@ -308,7 +339,7 @@ func (e *Engine) VerifyExit(timeout time.Duration) (ExitCheckResult, error) {
 	if err != nil {
 		return ExitCheckResult{}, err
 	}
-	req.Header.Set("User-Agent", "foxyvpn-windows-exit-check/1.0")
+	req.Header.Set("User-Agent", "foxyvpn-windows-exit-check/1.2")
 
 	start := time.Now()
 	resp, err := client.Do(req)
@@ -343,6 +374,71 @@ func (e *Engine) VerifyExit(timeout time.Duration) (ExitCheckResult, error) {
 	}, nil
 }
 
+// resolveEdgeIPViaDoH queries Cloudflare/Quad9/Google DoH (JSON/Wire) to bypass local ISP DNS poisoning.
+func resolveEdgeIPViaDoH(ctx context.Context, hostname string) string {
+	endpoints := []string{
+		"https://1.1.1.1/dns-query?name=" + url.QueryEscape(hostname) + "&type=A",
+		"https://9.9.9.9:5053/dns-query?name=" + url.QueryEscape(hostname) + "&type=A",
+		"https://8.8.8.8/resolve?name=" + url.QueryEscape(hostname) + "&type=A",
+	}
+	client := &http.Client{
+		Timeout: 3500 * time.Millisecond,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				MinVersion:       tls.VersionTLS12,
+				CurvePreferences: []tls.CurveID{tls.X25519, tls.CurveP256},
+			},
+		},
+	}
+
+	type dohAnswer struct {
+		Type int    `json:"type"`
+		Data string `json:"data"`
+	}
+	type dohResp struct {
+		Answer []dohAnswer `json:"Answer"`
+	}
+
+	resCh := make(chan string, len(endpoints))
+	for _, ep := range endpoints {
+		go func(u string) {
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+			if err != nil {
+				resCh <- ""
+				return
+			}
+			req.Header.Set("Accept", "application/dns-json")
+			resp, err := client.Do(req)
+			if err != nil {
+				resCh <- ""
+				return
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				resCh <- ""
+				return
+			}
+			var parsed dohResp
+			if err := json.NewDecoder(io.LimitReader(resp.Body, 8192)).Decode(&parsed); err == nil {
+				for _, ans := range parsed.Answer {
+					if ans.Type == 1 && net.ParseIP(ans.Data) != nil {
+						resCh <- ans.Data
+						return
+					}
+				}
+			}
+			resCh <- ""
+		}(ep)
+	}
+
+	for i := 0; i < len(endpoints); i++ {
+		if ip := <-resCh; ip != "" {
+			return ip
+		}
+	}
+	return ""
+}
+
 // H2Session manages a persistent TLS + HTTP/2 connection to a Fastly edge server.
 type H2Session struct {
 	raw           net.Conn
@@ -357,22 +453,157 @@ type H2Session struct {
 	logFunc       func(level, format string, args ...any)
 }
 
-func NewH2Session(cfg TunnelConfig, txCounter, rxCounter *atomic.Int64, logFn func(level, format string, args ...any)) (*H2Session, error) {
+type edgeCandidate struct {
+	sniHost   string
+	dialIP    string
+	port      int
+	splitMode string
+}
+
+// EstablishSmartH2Session races/rotates across SNI split modes, DoH-resolved IPs, and regional Fastly edges
+// so connections succeed directly without needing an external VPN even on DPI-filtered ISPs.
+func EstablishSmartH2Session(
+	ctx context.Context,
+	cfg TunnelConfig,
+	txCounter, rxCounter *atomic.Int64,
+	logFn func(level, format string, args ...any),
+) (*H2Session, string, error) {
+	primaryHost := cfg.EdgeHost
+	if primaryHost == "" || primaryHost == "p.m1.fastly-masque.net" {
+		primaryHost = "muc139.m1.fastly-masque.net"
+	}
+	port := cfg.EdgePort
+	if port == 0 || port == 443 {
+		port = 2499
+	}
+
+	splitMode := strings.ToLower(cfg.TlsSplitMode)
+	if splitMode == "" || splitMode == "record" || splitMode == "sni-record" || splitMode == "tcp" {
+		splitMode = "sni" // True SNI 3-segment TCP fragmentation matching Vauth/FoxyVPN
+	}
+
+	// Resolve primary host via DoH first to avoid poisoned local ISP DNS
+	dohCtx, dohCancel := context.WithTimeout(ctx, 3500*time.Millisecond)
+	dohIP := cfg.EdgeOverrideIP
+	if dohIP == "" {
+		dohIP = resolveEdgeIPViaDoH(dohCtx, primaryHost)
+	}
+	dohCancel()
+
+	var candidates []edgeCandidate
+	// Candidate 1: Primary host with DoH IP or override IP
+	if dohIP != "" {
+		candidates = append(candidates, edgeCandidate{
+			sniHost:   primaryHost,
+			dialIP:    dohIP,
+			port:      port,
+			splitMode: splitMode,
+		})
+	}
+
+	// Candidates 2..N: Try known clean Fastly Anycast IPs for primary host
+	for _, ip := range cleanFastlyEdgeIPs {
+		if ip != dohIP {
+			candidates = append(candidates, edgeCandidate{
+				sniHost:   primaryHost,
+				dialIP:    ip,
+				port:      port,
+				splitMode: splitMode,
+			})
+		}
+	}
+
+	// Candidates N+1: Fallback regional Fastly edge hosts (Munich, Rotterdam, Vienna, Paris, Brussels)
+	for _, h := range fallbackEdgeHosts {
+		if !strings.EqualFold(h, primaryHost) {
+			candidates = append(candidates, edgeCandidate{
+				sniHost:   h,
+				dialIP:    "",
+				port:      port,
+				splitMode: "sni",
+			})
+		}
+	}
+
+	// Fallback split mode attempts
+	candidates = append(candidates,
+		edgeCandidate{sniHost: primaryHost, dialIP: dohIP, port: port, splitMode: "first-byte"},
+		edgeCandidate{sniHost: primaryHost, dialIP: dohIP, port: port, splitMode: "off"},
+	)
+
+	var lastErr error
+	maxAttempts := 7
+	if len(candidates) < maxAttempts {
+		maxAttempts = len(candidates)
+	}
+
+	for i := 0; i < maxAttempts; i++ {
+		cand := candidates[i]
+		targetDisplay := cand.sniHost
+		if cand.dialIP != "" {
+			targetDisplay = fmt.Sprintf("%s [%s]", cand.sniHost, cand.dialIP)
+		}
+		logFn("INFO", "Dialing Fastly edge %s:%d (Anti-DPI: %s, attempt %d/%d)...",
+			targetDisplay, cand.port, cand.splitMode, i+1, maxAttempts)
+
+		singleCfg := cfg
+		singleCfg.EdgeHost = cand.sniHost
+		singleCfg.EdgeOverrideIP = cand.dialIP
+		singleCfg.EdgePort = cand.port
+		singleCfg.TlsSplitMode = cand.splitMode
+
+		// 3.8s dial timeout per attempt for fast failover
+		sess, err := dialSingleH2Session(singleCfg, txCounter, rxCounter, logFn, 3800*time.Millisecond)
+		if err == nil {
+			return sess, fmt.Sprintf("%s:%d", cand.sniHost, cand.port), nil
+		}
+		lastErr = err
+		logFn("WARN", "Edge attempt %d (%s:%d, %s) failed: %v", i+1, cand.sniHost, cand.port, cand.splitMode, err)
+	}
+
+	return nil, "", lastErr
+}
+
+func dialSingleH2Session(
+	cfg TunnelConfig,
+	txCounter, rxCounter *atomic.Int64,
+	logFn func(level, format string, args ...any),
+	timeout time.Duration,
+) (*H2Session, error) {
 	targetHost := cfg.EdgeHost
 	if cfg.EdgeOverrideIP != "" {
 		targetHost = cfg.EdgeOverrideIP
 	}
 	dialAddr := net.JoinHostPort(targetHost, fmt.Sprintf("%d", cfg.EdgePort))
 
-	dialer := &net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}
-	rawTCP, err := dialer.Dial("tcp", dialAddr)
-	if err != nil {
-		return nil, err
+	var rawTCP net.Conn
+	var err error
+
+	// Support optional upstream proxy (e.g. SOCKS5 127.0.0.1:10808)
+	if cfg.UpstreamProxy != "" {
+		if u, parseErr := url.Parse(cfg.UpstreamProxy); parseErr == nil && strings.HasPrefix(u.Scheme, "socks5") {
+			dialer, dErr := proxy.SOCKS5("tcp", u.Host, nil, &net.Dialer{Timeout: timeout})
+			if dErr == nil {
+				rawTCP, err = dialer.Dial("tcp", dialAddr)
+			}
+		}
 	}
 
-	// Wrap TCP socket with TLS ClientHello Splitter if anti-DPI fragmentation is enabled
+	if rawTCP == nil {
+		dialer := &net.Dialer{Timeout: timeout, KeepAlive: 20 * time.Second}
+		rawTCP, err = dialer.Dial("tcp", dialAddr)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if tcpConn, ok := rawTCP.(*net.TCPConn); ok {
+		// Disable Nagle's algorithm so split ClientHello segments are transmitted in separate TCP packets immediately
+		_ = tcpConn.SetNoDelay(true)
+	}
+
 	var baseConn net.Conn = rawTCP
-	if cfg.TlsSplitMode == "tcp" || cfg.TlsSplitMode == "record" {
+	if cfg.TlsSplitMode != "" && cfg.TlsSplitMode != "off" {
 		baseConn = &tlsSplitConn{
 			Conn: rawTCP,
 			mode: cfg.TlsSplitMode,
@@ -383,14 +614,16 @@ func NewH2Session(cfg TunnelConfig, txCounter, rxCounter *atomic.Int64, logFn fu
 		ServerName: cfg.EdgeHost,
 		MinVersion: tls.VersionTLS12,
 		NextProtos: []string{"h2"},
+		// Keep ClientHello compact (~300 bytes) by avoiding 1200-byte post-quantum X25519MLKEM768 key share
+		CurvePreferences: []tls.CurveID{tls.X25519, tls.CurveP256},
 	})
-	if err := tlsConn.SetDeadline(time.Now().Add(15 * time.Second)); err != nil {
+	if err := tlsConn.SetDeadline(time.Now().Add(timeout)); err != nil {
 		_ = rawTCP.Close()
 		return nil, err
 	}
 	if err := tlsConn.Handshake(); err != nil {
 		_ = rawTCP.Close()
-		return nil, fmt.Errorf("TLS handshake with Fastly edge failed: %w", err)
+		return nil, fmt.Errorf("TLS handshake failed: %w", err)
 	}
 	_ = tlsConn.SetDeadline(time.Time{})
 
@@ -400,8 +633,8 @@ func NewH2Session(cfg TunnelConfig, txCounter, rxCounter *atomic.Int64, logFn fu
 	}
 
 	tr := &http2.Transport{
-		ReadIdleTimeout:  30 * time.Second,
-		PingTimeout:      15 * time.Second,
+		ReadIdleTimeout:  20 * time.Second,
+		PingTimeout:      12 * time.Second,
 		WriteByteTimeout: 30 * time.Second,
 	}
 	cc, err := tr.NewClientConn(tlsConn)
@@ -547,7 +780,68 @@ func (c *h2StreamConn) SetDeadline(t time.Time) error      { return nil }
 func (c *h2StreamConn) SetReadDeadline(t time.Time) error  { return nil }
 func (c *h2StreamConn) SetWriteDeadline(t time.Time) error { return nil }
 
-// tlsSplitConn fragments the initial TLS ClientHello packet at the SNI midpoint to evade DPI filters.
+// findSNIOffset locates the exact start and end byte offsets of the SNI hostname inside a TLS ClientHello record.
+// Ported directly from Vauth/FoxyVPN's TlsClientHelloSplitter.kt.
+func findSNIOffset(b []byte) (start int, end int, ok bool) {
+	if len(b) < 44 || b[0] != 0x16 || b[5] != 0x01 {
+		return 0, 0, false
+	}
+	curr := 5 + 4 + 2 + 32 // skip record header(5) + handshake header(4) + version(2) + random(32)
+	if curr >= len(b) {
+		return 0, 0, false
+	}
+	sessionIDLen := int(b[curr])
+	curr += 1 + sessionIDLen
+	if curr+2 > len(b) {
+		return 0, 0, false
+	}
+	cipherSuitesLen := int(binary.BigEndian.Uint16(b[curr : curr+2]))
+	curr += 2 + cipherSuitesLen
+	if curr >= len(b) {
+		return 0, 0, false
+	}
+	compMethodsLen := int(b[curr])
+	curr += 1 + compMethodsLen
+	if curr+2 > len(b) {
+		return 0, 0, false
+	}
+	extTotalLen := int(binary.BigEndian.Uint16(b[curr : curr+2]))
+	curr += 2
+	extEnd := curr + extTotalLen
+	if extEnd > len(b) {
+		extEnd = len(b)
+	}
+
+	for curr+4 <= extEnd {
+		extType := binary.BigEndian.Uint16(b[curr : curr+2])
+		extLen := int(binary.BigEndian.Uint16(b[curr+2 : curr+4]))
+		body := curr + 4
+		if body+extLen > extEnd {
+			return 0, 0, false
+		}
+		if extType == 0x0000 { // server_name extension
+			if extLen < 5 {
+				return 0, 0, false
+			}
+			listLen := int(binary.BigEndian.Uint16(b[body : body+2]))
+			listPos := body + 2
+			if listPos+listLen > body+extLen || b[listPos] != 0x00 {
+				return 0, 0, false
+			}
+			nameLen := int(binary.BigEndian.Uint16(b[listPos+1 : listPos+3]))
+			s := listPos + 3
+			e := s + nameLen
+			if e > listPos+listLen || e > len(b) || s >= e {
+				return 0, 0, false
+			}
+			return s, e, true
+		}
+		curr = body + extLen
+	}
+	return 0, 0, false
+}
+
+// tlsSplitConn fragments the initial TLS ClientHello packet right inside the SNI hostname to defeat ISP DPI.
 type tlsSplitConn struct {
 	net.Conn
 	mode      string
@@ -555,43 +849,53 @@ type tlsSplitConn struct {
 }
 
 func (c *tlsSplitConn) Write(b []byte) (int, error) {
-	if c.splitDone || len(b) < 48 || b[0] != 0x16 || b[5] != 0x01 {
+	if c.splitDone || len(b) < 44 || b[0] != 0x16 || b[5] != 0x01 {
 		return c.Conn.Write(b)
 	}
 	c.splitDone = true
 
-	mid := len(b) / 2
-	if c.mode == "record" && len(b) > 5 {
-		payload := b[5:]
-		if len(payload) > 16 {
-			p1 := payload[:len(payload)/2]
-			p2 := payload[len(payload)/2:]
-			rec1 := make([]byte, 5+len(p1))
-			copy(rec1[:3], b[:3])
-			binary.BigEndian.PutUint16(rec1[3:5], uint16(len(p1)))
-			copy(rec1[5:], p1)
-
-			rec2 := make([]byte, 5+len(p2))
-			copy(rec2[:3], b[:3])
-			binary.BigEndian.PutUint16(rec2[3:5], uint16(len(p2)))
-			copy(rec2[5:], p2)
-
-			if _, err := c.Conn.Write(rec1); err != nil {
-				return 0, err
-			}
-			if _, err := c.Conn.Write(rec2); err != nil {
-				return 0, err
-			}
-			return len(b), nil
+	// First byte mode: splits 0x16 record header byte
+	if c.mode == "first-byte" {
+		if _, err := c.Conn.Write(b[:1]); err != nil {
+			return 0, err
 		}
+		time.Sleep(2 * time.Millisecond)
+		if _, err := c.Conn.Write(b[1:]); err != nil {
+			return 1, err
+		}
+		return len(b), nil
 	}
 
-	// Default TCP segment split
-	if _, err := c.Conn.Write(b[:mid]); err != nil {
+	// Default "sni" mode (Exact match to Vauth/FoxyVPN TlsClientHelloSplitter.kt SNI mode):
+	// Splits the TLS ClientHello across 3 separate TCP segments:
+	// 1. [0 .. sniStart] (record header + handshake up to start of SNI hostname)
+	// 2. [sniStart .. sniStart+1] (exactly 1 character of SNI hostname)
+	// 3. [sniStart+1 .. end] (rest of SNI hostname + extensions)
+	// Delivered with TCP_NODELAY so each segment travels in its own TCP packet, defeating ISP DPI inspection without invalidating TLS record structure.
+	sniStart, _, foundSNI := findSNIOffset(b)
+	if foundSNI && sniStart > 0 && sniStart+1 < len(b) {
+		if _, err := c.Conn.Write(b[:sniStart]); err != nil {
+			return 0, err
+		}
+		time.Sleep(2 * time.Millisecond)
+		if _, err := c.Conn.Write(b[sniStart : sniStart+1]); err != nil {
+			return sniStart, err
+		}
+		time.Sleep(2 * time.Millisecond)
+		if _, err := c.Conn.Write(b[sniStart+1:]); err != nil {
+			return sniStart + 1, err
+		}
+		return len(b), nil
+	}
+
+	// Fallback 2-segment split if SNI offset couldn't be parsed
+	splitPos := len(b) / 2
+	if _, err := c.Conn.Write(b[:splitPos]); err != nil {
 		return 0, err
 	}
-	if _, err := c.Conn.Write(b[mid:]); err != nil {
-		return mid, err
+	time.Sleep(2 * time.Millisecond)
+	if _, err := c.Conn.Write(b[splitPos:]); err != nil {
+		return splitPos, err
 	}
 	return len(b), nil
 }

@@ -6,6 +6,7 @@
 
 **کلاینت دسکتاپ بومی، رایگان و بدون نیاز به اشتراک Firefox VPN برای ویندوز ۱۰ و ۱۱**
 
+[![Version](https://img.shields.io/badge/Version-1.0.2%20Stable-orange?style=for-the-badge&logo=github)](#)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011%20(x64)-0078D6?style=for-the-badge&logo=windows&logoColor=white)](#)
 [![Framework](https://img.shields.io/badge/Built%20With-Wails%20v2%20%2B%20Go%201.23-00ADD8?style=for-the-badge&logo=go&logoColor=white)](#)
 [![Allowance](https://img.shields.io/badge/Monthly%20Traffic-50%20GB%20Free-FE6C31?style=for-the-badge&logo=firefox-browser&logoColor=white)](#)
@@ -119,8 +120,8 @@ git remote add origin https://github.com/YOUR_USERNAME/foxyvpn-windows.git
 git push -u origin main
 
 # برای ساخت خودکار Release در گیت‌هاب:
-git tag v1.2.0
-git push origin v1.2.0
+git tag v1.0.2
+git push origin v1.0.2
 ```
 
 ---

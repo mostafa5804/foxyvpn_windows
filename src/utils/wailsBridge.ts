@@ -30,121 +30,121 @@ declare global {
 
 export const DEFAULT_SERVERS: ServerInfo[] = [
   {
-    id: 'de-fra-1',
+    id: 'de-muc-1',
     countryName: 'Germany',
     countryCode: 'DE',
-    cityName: 'Frankfurt',
-    cityCode: 'FRA',
-    host: 'de-fra.m1.fastly-masque.net',
-    port: 443,
+    cityName: 'Munich',
+    cityCode: 'MUC',
+    host: 'muc139.m1.fastly-masque.net',
+    port: 2499,
     protocol: 'HTTP/2 CONNECT',
     latencyMs: 29,
-    exitIpPreview: '151.101.65.194',
+    exitIpPreview: '23.235.42.8',
   },
   {
-    id: 'nl-ams-1',
+    id: 'nl-ehrd-1',
     countryName: 'Netherlands',
     countryCode: 'NL',
-    cityName: 'Amsterdam',
-    cityCode: 'AMS',
-    host: 'nl-ams.m1.fastly-masque.net',
-    port: 443,
+    cityName: 'Rotterdam',
+    cityCode: 'EHRD',
+    host: 'ehrd229.m1.fastly-masque.net',
+    port: 2499,
     protocol: 'HTTP/2 CONNECT',
     latencyMs: 34,
-    exitIpPreview: '151.101.37.140',
+    exitIpPreview: '23.235.42.17',
   },
   {
-    id: 'ch-zrh-1',
-    countryName: 'Switzerland',
-    countryCode: 'CH',
-    cityName: 'Zurich',
-    cityCode: 'ZRH',
-    host: 'ch-zrh.m1.fastly-masque.net',
-    port: 443,
+    id: 'at-vie-1',
+    countryName: 'Austria',
+    countryCode: 'AT',
+    cityName: 'Vienna',
+    cityCode: 'VIE',
+    host: 'vie63.m1.fastly-masque.net',
+    port: 2499,
     protocol: 'HTTP/2 CONNECT',
     latencyMs: 37,
-    exitIpPreview: '151.101.112.88',
+    exitIpPreview: '23.235.42.31',
   },
   {
-    id: 'fr-par-1',
+    id: 'fr-lfpb-1',
     countryName: 'France',
     countryCode: 'FR',
     cityName: 'Paris',
-    cityCode: 'PAR',
-    host: 'fr-par.m1.fastly-masque.net',
-    port: 443,
+    cityCode: 'LFPB',
+    host: 'lfpb115.m1.fastly-masque.net',
+    port: 2499,
     protocol: 'HTTP/2 CONNECT',
     latencyMs: 41,
-    exitIpPreview: '151.101.122.44',
+    exitIpPreview: '23.235.42.9',
   },
   {
-    id: 'gb-lon-1',
+    id: 'gb-eglc-1',
     countryName: 'United Kingdom',
     countryCode: 'GB',
     cityName: 'London',
-    cityCode: 'LON',
-    host: 'gb-lon.m1.fastly-masque.net',
-    port: 443,
+    cityCode: 'EGLC',
+    host: 'eglc860.m1.fastly-masque.net',
+    port: 2499,
     protocol: 'HTTP/2 CONNECT',
     latencyMs: 44,
     exitIpPreview: '151.101.17.209',
   },
   {
-    id: 'se-sto-1',
+    id: 'se-essb-1',
     countryName: 'Sweden',
     countryCode: 'SE',
     cityName: 'Stockholm',
-    cityCode: 'STO',
-    host: 'se-sto.m1.fastly-masque.net',
-    port: 443,
+    cityCode: 'ESSB',
+    host: 'essb127.m1.fastly-masque.net',
+    port: 2499,
     protocol: 'HTTP/2 CONNECT',
     latencyMs: 49,
     exitIpPreview: '151.101.85.77',
   },
   {
-    id: 'us-nyc-1',
+    id: 'fi-hel-1',
+    countryName: 'Finland',
+    countryCode: 'FI',
+    cityName: 'Helsinki',
+    cityCode: 'HEL',
+    host: 'hel141.m1.fastly-masque.net',
+    port: 2499,
+    protocol: 'HTTP/2 CONNECT',
+    latencyMs: 46,
+    exitIpPreview: '151.101.112.88',
+  },
+  {
+    id: 'be-bru-1',
+    countryName: 'Belgium',
+    countryCode: 'BE',
+    cityName: 'Brussels',
+    cityCode: 'BRU',
+    host: 'bru148.m1.fastly-masque.net',
+    port: 2499,
+    protocol: 'HTTP/2 CONNECT',
+    latencyMs: 38,
+    exitIpPreview: '151.101.37.140',
+  },
+  {
+    id: 'us-us-1',
     countryName: 'United States',
     countryCode: 'US',
-    cityName: 'New York',
-    cityCode: 'NYC',
-    host: 'us-nyc.m1.fastly-masque.net',
-    port: 443,
+    cityName: 'United States',
+    cityCode: 'US',
+    host: 'us.m1.fastly-masque.net',
+    port: 2499,
     protocol: 'HTTP/2 CONNECT',
     latencyMs: 86,
     exitIpPreview: '151.101.1.195',
   },
   {
-    id: 'ca-tor-1',
-    countryName: 'Canada',
-    countryCode: 'CA',
-    cityName: 'Toronto',
-    cityCode: 'TOR',
-    host: 'ca-tor.m1.fastly-masque.net',
-    port: 443,
-    protocol: 'HTTP/2 CONNECT',
-    latencyMs: 94,
-    exitIpPreview: '151.101.49.103',
-  },
-  {
-    id: 'sg-sin-1',
-    countryName: 'Singapore',
-    countryCode: 'SG',
-    cityName: 'Singapore',
-    cityCode: 'SIN',
-    host: 'sg-sin.m1.fastly-masque.net',
-    port: 443,
-    protocol: 'HTTP/2 CONNECT',
-    latencyMs: 138,
-    exitIpPreview: '151.101.9.118',
-  },
-  {
-    id: 'jp-tyo-1',
+    id: 'jp-rjtf-1',
     countryName: 'Japan',
     countryCode: 'JP',
     cityName: 'Tokyo',
-    cityCode: 'TYO',
-    host: 'jp-tyo.m1.fastly-masque.net',
-    port: 443,
+    cityCode: 'RJTF',
+    host: 'rjtf770.m1.fastly-masque.net',
+    port: 2499,
     protocol: 'HTTP/2 CONNECT',
     latencyMs: 162,
     exitIpPreview: '151.101.109.52',
@@ -158,8 +158,8 @@ function nowTimeStr(): string {
 
 class WailsRuntimeBridge {
   private logs: string[] = [
-    `${nowTimeStr()} [INFO ] FoxyVPN Windows Client v1.2.0 initialized (Wails v2 + Go 1.23)`,
-    `${nowTimeStr()} [INFO ] Loaded Mozilla Remote Settings topology (10 Fastly HTTP/2 CONNECT edge regions)`,
+    `${nowTimeStr()} [INFO ] FoxyVPN Windows Client v1.0.2 initialized (Wails v2 + Go 1.23)`,
+    `${nowTimeStr()} [INFO ] Loaded Mozilla Remote Settings topology (Fastly HTTP/2 CONNECT edge regions on port 2499)`,
     `${nowTimeStr()} [INFO ] Wintun v0.14.1 driver (amd64) verified in application directory`,
   ];
 
@@ -168,7 +168,7 @@ class WailsRuntimeBridge {
   private currentUser: UserInfo | null = null;
   private settings: ClientSettings = {
     mode: 'tun',
-    tlsSplitMode: 'record',
+    tlsSplitMode: 'sni',
     dohProvider: '1.1.1.1',
     mtu: 1380,
     killSwitch: true,
@@ -179,8 +179,8 @@ class WailsRuntimeBridge {
   private status: ConnectionStatus = {
     state: 'Disconnected',
     mode: 'tun',
-    serverId: 'de-fra-1',
-    serverLabel: 'Germany — Frankfurt',
+    serverId: 'de-muc-1',
+    serverLabel: 'Germany — Munich',
     uptimeSeconds: 0,
     uploadedBytes: 0,
     downloadedBytes: 0,
@@ -201,6 +201,10 @@ class WailsRuntimeBridge {
 
   private get nativeApp() {
     return typeof window !== 'undefined' ? window.go?.main?.App : undefined;
+  }
+
+  get isNative(): boolean {
+    return typeof window !== 'undefined' && Boolean(window.go?.main?.App);
   }
 
   async login(email: string, password: string): Promise<UserInfo> {
@@ -230,7 +234,7 @@ class WailsRuntimeBridge {
     }
     this.addLog('INFO', `Deriving FxA quickStretch + authPW for new account ${email}`);
     this.addLog('INFO', `POST https://api.accounts.firefox.com/v1/account/create?keys=true (service=5882386c6d801776)`);
-    this.addLog('INFO', `Fastly PoW challenge solved (SHA-256 2-byte suffix); 6-digit verification code dispatched to ${email}`);
+    this.addLog('INFO', `Fastly PoW challenge solved (SHA-256 2-byte suffix); verification link/code dispatched to ${email}`);
     this.pendingEmail = email;
     this.pendingIsSignUp = true;
     return {
@@ -328,15 +332,15 @@ class WailsRuntimeBridge {
     this.addLog('INFO', `GET https://vpn.mozilla.org/api/v1/fpn/token -> Obtained short-lived Guardian JWT ProxyPass`);
     this.addLog(
       'INFO',
-      `Dialing Fastly edge ${srv.host}:${srv.port} (ALPN=h2, TLS-Split=${this.settings.tlsSplitMode.toUpperCase()})`
+      `Dialing Fastly edge ${srv.host}:${srv.port} (ALPN=h2, Anti-DPI=${this.settings.tlsSplitMode.toUpperCase()})`
     );
 
     if (mode === 'tun') {
       this.addLog(
         'INFO',
-        `Wintun: Created virtual adapter "FoxyVPN-Adapter" (IP 10.0.0.2/24, GW 10.0.0.1, MTU ${this.settings.mtu})`
+        `Wintun: Created virtual adapter "FoxyVPN-Adapter" (IP 10.0.0.2/24, MTU ${this.settings.mtu})`
       );
-      this.addLog('INFO', `Routing: Added split default routes 0.0.0.0/1 & 128.0.0.0/1 -> 10.0.0.1 (metric 1)`);
+      this.addLog('INFO', `Proxy: Enabled Windows WinINET System Proxy 127.0.0.1:8080 & SOCKS5 127.0.0.1:1080`);
       this.addLog('INFO', `DNS: Intercepting UDP/53 -> DoH https://${this.settings.dohProvider}/dns-query over HTTP/2`);
     } else {
       this.addLog('INFO', `Listening on SOCKS5 127.0.0.1:1080 and HTTP CONNECT 127.0.0.1:8080`);
@@ -346,7 +350,7 @@ class WailsRuntimeBridge {
     this.status.state = 'Connected';
     this.status.uptimeSeconds = 1;
     this.status.pingMs = srv.latencyMs;
-    this.status.exitIp = srv.exitIpPreview || '151.101.65.194';
+    this.status.exitIp = srv.exitIpPreview || '23.235.42.8';
     this.status.exitCountry = srv.countryCode;
     this.status.exitVerified = true;
     this.addLog(
@@ -361,10 +365,9 @@ class WailsRuntimeBridge {
     }
     if (this.status.state !== 'Disconnected') {
       if (this.status.mode === 'tun') {
-        this.addLog('INFO', 'Removed split routes 0.0.0.0/1 & 128.0.0.0/1 and closed Wintun session "FoxyVPN-Adapter"');
-      } else {
-        this.addLog('INFO', 'Restored Windows WinINET Registry ProxyEnable=0');
+        this.addLog('INFO', 'Closed Wintun session "FoxyVPN-Adapter" and restored adapter DNS');
       }
+      this.addLog('INFO', 'Restored Windows WinINET Registry ProxyEnable=0');
       this.addLog('INFO', 'Closed Fastly HTTP/2 CONNECT upstream session');
     }
     this.status.state = 'Disconnected';
@@ -399,7 +402,7 @@ class WailsRuntimeBridge {
     this.status.mode = newSettings.mode;
     this.addLog(
       'INFO',
-      `Settings applied: Mode=${newSettings.mode.toUpperCase()}, TLS-Split=${newSettings.tlsSplitMode}, DoH=${newSettings.dohProvider}, MTU=${newSettings.mtu}`
+      `Settings applied: Mode=${newSettings.mode.toUpperCase()}, Anti-DPI=${newSettings.tlsSplitMode}, DoH=${newSettings.dohProvider}, MTU=${newSettings.mtu}`
     );
   }
 

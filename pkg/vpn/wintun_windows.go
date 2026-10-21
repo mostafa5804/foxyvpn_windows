@@ -111,11 +111,13 @@ func StartWintunAdapter(cfg TunnelConfig, eng *Engine) (*WintunController, error
 }
 
 func (w *WintunController) configureNetworkInterface(cfg TunnelConfig) error {
-	// 1. Set IPv4 address 10.0.0.2/24 and gateway 10.0.0.1
+	// 1. Set IPv4 address 10.0.0.2/24 on FoxyVPN-Adapter (without overriding 0.0.0.0/0 gateway to prevent routing loops)
 	if err := runHiddenCmd("netsh", "interface", "ip", "set", "address",
 		fmt.Sprintf("name=%s", AdapterName), "source=static",
-		"addr=10.0.0.2", "mask=255.255.255.0", "gateway=10.0.0.1", "gwmetric=1"); err != nil {
-		return fmt.Errorf("configuring Wintun IPv4 address: %w", err)
+		"addr=10.0.0.2", "mask=255.255.255.0", "none"); err != nil {
+		// Fallback syntax for older netsh versions
+		_ = runHiddenCmd("netsh", "interface", "ip", "set", "address",
+			fmt.Sprintf("name=%s", AdapterName), "static", "10.0.0.2", "255.255.255.0")
 	}
 
 	// 2. Set DNS server on the adapter
@@ -133,10 +135,6 @@ func (w *WintunController) configureNetworkInterface(cfg TunnelConfig) error {
 	}
 	_ = runHiddenCmd("netsh", "interface", "ipv4", "set", "subinterface",
 		AdapterName, fmt.Sprintf("mtu=%d", mtu), "store=active")
-
-	// 4. Direct default traffic (0.0.0.0/1 and 128.0.0.0/1) through 10.0.0.1
-	_ = runHiddenCmd("route", "add", "0.0.0.0", "mask", "128.0.0.0", "10.0.0.1", "metric", "1")
-	_ = runHiddenCmd("route", "add", "128.0.0.0", "mask", "128.0.0.0", "10.0.0.1", "metric", "1")
 
 	return nil
 }

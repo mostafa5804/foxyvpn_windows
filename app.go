@@ -364,6 +364,7 @@ func (a *App) Connect(serverID string, mode string) error {
 		DohProvider:    cfgSettings.DohProvider,
 		MTU:            cfgSettings.MTU,
 		KillSwitch:     cfgSettings.KillSwitch,
+		UpstreamProxy:  cfgSettings.ControlPlaneProxy,
 		SocksListen:    "127.0.0.1:1080",
 		HttpListen:     "127.0.0.1:8080",
 	}
@@ -447,6 +448,8 @@ func (a *App) GetStatus() ConnectionStatus {
 	state := a.state
 	if running && state != "Connected" {
 		state = "Connected"
+	} else if !running && state == "Connected" {
+		state = "Disconnected"
 	}
 
 	var srvID, srvLabel string
@@ -511,15 +514,15 @@ func (a *App) GetLogs() []string {
 
 func defaultFallbackServers() []ServerInfo {
 	return []ServerInfo{
-		{ID: "de-fra-1", CountryName: "Germany", CountryCode: "DE", CityName: "Frankfurt", CityCode: "FRA", Host: "de-fra.m1.fastly-masque.net", Port: 443, Protocol: "HTTP/2 CONNECT", LatencyMs: 32},
-		{ID: "nl-ams-1", CountryName: "Netherlands", CountryCode: "NL", CityName: "Amsterdam", CityCode: "AMS", Host: "nl-ams.m1.fastly-masque.net", Port: 443, Protocol: "HTTP/2 CONNECT", LatencyMs: 36},
-		{ID: "gb-lon-1", CountryName: "United Kingdom", CountryCode: "GB", CityName: "London", CityCode: "LON", Host: "gb-lon.m1.fastly-masque.net", Port: 443, Protocol: "HTTP/2 CONNECT", LatencyMs: 41},
-		{ID: "fr-par-1", CountryName: "France", CountryCode: "FR", CityName: "Paris", CityCode: "PAR", Host: "fr-par.m1.fastly-masque.net", Port: 443, Protocol: "HTTP/2 CONNECT", LatencyMs: 39},
-		{ID: "us-nyc-1", CountryName: "United States", CountryCode: "US", CityName: "New York", CityCode: "NYC", Host: "us-nyc.m1.fastly-masque.net", Port: 443, Protocol: "HTTP/2 CONNECT", LatencyMs: 88},
-		{ID: "us-sjc-1", CountryName: "United States", CountryCode: "US", CityName: "San Jose", CityCode: "SJC", Host: "us-sjc.m1.fastly-masque.net", Port: 443, Protocol: "HTTP/2 CONNECT", LatencyMs: 134},
-		{ID: "ch-zrh-1", CountryName: "Switzerland", CountryCode: "CH", CityName: "Zurich", CityCode: "ZRH", Host: "ch-zrh.m1.fastly-masque.net", Port: 443, Protocol: "HTTP/2 CONNECT", LatencyMs: 38},
-		{ID: "se-sto-1", CountryName: "Sweden", CountryCode: "SE", CityName: "Stockholm", CityCode: "STO", Host: "se-sto.m1.fastly-masque.net", Port: 443, Protocol: "HTTP/2 CONNECT", LatencyMs: 49},
-		{ID: "jp-tyo-1", CountryName: "Japan", CountryCode: "JP", CityName: "Tokyo", CityCode: "TYO", Host: "jp-tyo.m1.fastly-masque.net", Port: 443, Protocol: "HTTP/2 CONNECT", LatencyMs: 168},
-		{ID: "sg-sin-1", CountryName: "Singapore", CountryCode: "SG", CityName: "Singapore", CityCode: "SIN", Host: "sg-sin.m1.fastly-masque.net", Port: 443, Protocol: "HTTP/2 CONNECT", LatencyMs: 142},
+		{ID: "de-muc-1", CountryName: "Germany", CountryCode: "DE", CityName: "Munich", CityCode: "MUC", Host: "muc139.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 32},
+		{ID: "nl-ehrd-1", CountryName: "Netherlands", CountryCode: "NL", CityName: "Rotterdam", CityCode: "EHRD", Host: "ehrd229.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 36},
+		{ID: "gb-eglc-1", CountryName: "United Kingdom", CountryCode: "GB", CityName: "London", CityCode: "EGLC", Host: "eglc860.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 41},
+		{ID: "fr-lfpb-1", CountryName: "France", CountryCode: "FR", CityName: "Paris", CityCode: "LFPB", Host: "lfpb115.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 39},
+		{ID: "at-vie-1", CountryName: "Austria", CountryCode: "AT", CityName: "Vienna", CityCode: "VIE", Host: "vie63.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 37},
+		{ID: "fi-hel-1", CountryName: "Finland", CountryCode: "FI", CityName: "Helsinki", CityCode: "HEL", Host: "hel141.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 45},
+		{ID: "be-bru-1", CountryName: "Belgium", CountryCode: "BE", CityName: "Brussels", CityCode: "BRU", Host: "bru148.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 38},
+		{ID: "se-essb-1", CountryName: "Sweden", CountryCode: "SE", CityName: "Stockholm", CityCode: "ESSB", Host: "essb127.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 49},
+		{ID: "us-us-1", CountryName: "United States", CountryCode: "US", CityName: "United States", CityCode: "US", Host: "us.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 88},
+		{ID: "jp-rjtf-1", CountryName: "Japan", CountryCode: "JP", CityName: "Tokyo", CityCode: "RJTF", Host: "rjtf770.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 162},
 	}
 }

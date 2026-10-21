@@ -191,9 +191,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 isDark ? 'bg-slate-950 border-slate-800 text-slate-100' : 'bg-slate-50 border-slate-300 text-slate-900'
               }`}
             >
-              <option value="record">TLS Record Split at SNI Extension (Recommended)</option>
-              <option value="tcp">TCP Segment Split across ClientHello</option>
-              <option value="off">Disabled (Standard TLS 1.3 Handshake)</option>
+              <option value="sni">SNI Hostname TCP Segment Split (پیش‌فرض پیشنهادی - ضد فیلترینگ DPI)</option>
+              <option value="first-byte">First Byte Fragmentation (شکست بایت اول)</option>
+              <option value="off">Disabled (اتصال مستقیم استاندارد TLS 1.3)</option>
             </select>
           </div>
 

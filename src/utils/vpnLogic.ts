@@ -41,7 +41,7 @@ export interface ConnectionStatus {
 
 export interface ClientSettings {
   mode: 'tun' | 'proxy';
-  tlsSplitMode: 'off' | 'tcp' | 'record';
+  tlsSplitMode: 'sni' | 'first-byte' | 'off';
   dohProvider: '1.1.1.1' | '8.8.8.8' | '9.9.9.9';
   mtu: number;
   killSwitch: boolean;
@@ -145,8 +145,15 @@ export function validateAuthInput(
 ): ValidationResult {
   if (mode === 'verify') {
     const code = (fields.code || '').trim();
-    if (!/^\d{6}$/.test(code)) {
-      return { valid: false, error: 'Please enter the 6-digit verification code sent to your email.' };
+    const isSixDigitOtp = /^\d{6}$/.test(code);
+    const isVerificationUrl = code.includes('code=') || /^https?:\/\//i.test(code);
+    const isHexVerifyCode = /^[0-9a-fA-F]{16,64}$/.test(code);
+    const isBrowserConfirmed = code === 'LINK_CLICKED' || code === 'VERIFIED';
+    if (!isSixDigitOtp && !isVerificationUrl && !isHexVerifyCode && !isBrowserConfirmed) {
+      return {
+        valid: false,
+        error: 'Please enter the 6-digit code, paste the confirmation link from your email, or click "I Opened the Email Link".',
+      };
     }
     return { valid: true };
   }

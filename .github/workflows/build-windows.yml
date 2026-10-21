@@ -88,30 +88,15 @@ jobs:
       - name: Install Wails v2 CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.9.2
 
-      - name: Prepare Windows UAC Manifest & App Icon
+      - name: Prepare Windows UAC Manifest & Authentic App Icon
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "build/windows" | Out-Null
           Copy-Item -Force "manifest.xml" "build/windows/wails.exe.manifest"
-          if (-not (Test-Path "build/appicon.png")) {
-            Add-Type -AssemblyName System.Drawing
-            $bmp = New-Object System.Drawing.Bitmap(512, 512)
-            $g = [System.Drawing.Graphics]::FromImage($bmp)
-            $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-            $g.Clear([System.Drawing.Color]::FromArgb(255, 11, 15, 23))
-            $bgBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 22, 31, 48))
-            $g.FillEllipse($bgBrush, 36, 36, 440, 440)
-            $foxBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 254, 108, 49))
-            $g.FillEllipse($foxBrush, 96, 96, 320, 320)
-            $winBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 0, 120, 214))
-            $g.FillRectangle($winBrush, 196, 196, 54, 54)
-            $g.FillRectangle($winBrush, 262, 196, 54, 54)
-            $g.FillRectangle($winBrush, 196, 262, 54, 54)
-            $g.FillRectangle($winBrush, 262, 262, 54, 54)
-            $g.Dispose()
-            $bmp.Save("build/appicon.png", [System.Drawing.Imaging.ImageFormat]::Png)
-            $bmp.Dispose()
+          if (Test-Path "public/appicon.png") {
+            Copy-Item -Force "public/appicon.png" "build/appicon.png"
           }
+          Write-Host "Prepared Windows UAC Administrator Manifest and high-resolution App Icon"
 
       - name: Build FoxyVPN Windows Executable (Wails v2)
         shell: pwsh
@@ -139,7 +124,7 @@ jobs:
           }
           $nsiScript = @'
           !include "MUI2.nsh"
-          Name "FoxyVPN Windows"
+          Name "FoxyVPN Windows v1.0.2"
           OutFile "release\FoxyVPN-Setup.exe"
           InstallDir "$PROGRAMFILES64\FoxyVPN"
           RequestExecutionLevel admin

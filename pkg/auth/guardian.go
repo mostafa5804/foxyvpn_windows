@@ -673,8 +673,10 @@ func (g *GuardianService) loginAttempt(ctx context.Context, email, password, ver
 	return &loginResp, nil
 }
 
-// VerifyEmailCode verifies a 6-digit code sent to the user's email for either Sign-In or Sign-Up,
-// exchanges the sessionToken for OAuth tokens, and activates the 50 GB Guardian FPN entitlement.
+// VerifyEmailCode verifies:
+// 1. A 6-digit OTP code (Sign-In with existing account),
+// 2. A pasted confirmation URL from Mozilla email (e.g., https://accounts.firefox.com/verify_email?uid=...&code=...), or
+// 3. "LINK_CLICKED" when the user clicked the confirmation link in their browser.
 func (g *GuardianService) VerifyEmailCode(ctx context.Context, code string) (*SavedTokens, *Entitlement, error) {
 	g.mu.RLock()
 	pending := g.pendingSession
@@ -685,12 +687,87 @@ func (g *GuardianService) VerifyEmailCode(ctx context.Context, code string) (*Sa
 	}
 
 	code = strings.TrimSpace(code)
+	extractedUID := pending.UID
+
+	// Case 1: User pasted the full confirmation link from the Firefox verification email
+	if strings.Contains(code, "code=") || strings.HasPrefix(strings.ToLower(code), "http") {
+		if u, err := url.Parse(code); err == nil {
+			q := u.Query()
+			if c := q.Get("code"); c != "" {
+				code = strings.TrimSpace(c)
+			}
+			if uidParam := q.Get("uid"); uidParam != "" {
+				extractedUID = strings.TrimSpace(uidParam)
+			}
+		}
+	}
+
 	hawkID, hawkKey, err := deriveHawkCredentials(pending.SessionToken, "sessionToken")
 	if err != nil {
 		return nil, nil, err
 	}
 
-	// Try session/verify_code first; for newly registered accounts, also support recovery_email/verify_code
+	// Case 2: User clicked the email confirmation link in their browser ("LINK_CLICKED" or "VERIFIED")
+	if strings.EqualFold(code, "LINK_CLICKED") || strings.EqualFold(code, "VERIFIED") {
+		statusURL := FxaAuthServer + "/recovery_email/status"
+		statusResp, sErr := g.doWithChallenge(ctx, func() (*http.Request, error) {
+			authHeader, err := hawkHeader(http.MethodGet, statusURL, hawkID, hawkKey, "")
+			if err != nil {
+				return nil, err
+			}
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, statusURL, nil)
+			if err != nil {
+				return nil, err
+			}
+			req.Header.Set("Authorization", authHeader)
+			applyMozillaHeaders(req)
+			return req, nil
+		})
+		if sErr == nil {
+			sData, _ := io.ReadAll(io.LimitReader(statusResp.Body, 8192))
+			_ = statusResp.Body.Close()
+			var st struct {
+				Verified bool `json:"verified"`
+			}
+			_ = json.Unmarshal(sData, &st)
+			if !st.Verified {
+				return nil, nil, errors.New("ایمیل شما هنوز در سرور فایرفاکس تایید نشده است؛ ابتدا لینک داخل ایمیل را باز کنید یا لینک را در کادر بالا Paste نمایید")
+			}
+		}
+		g.log("INFO", "Browser email verification confirmed for %s", pending.Email)
+		return g.CompleteSessionLogin(ctx, pending.Email, extractedUID, pending.SessionToken)
+	}
+
+	// Case 3: Pasted 32-char hex code from link or SignUp recovery_email/verify_code
+	if pending.IsSignUp || len(code) > 8 {
+		altBody, _ := json.Marshal(map[string]string{
+			"uid":  extractedUID,
+			"code": code,
+		})
+		altURL := FxaAuthServer + "/recovery_email/verify_code"
+		altResp, altErr := g.doWithChallenge(ctx, func() (*http.Request, error) {
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, altURL, bytes.NewReader(altBody))
+			if err != nil {
+				return nil, err
+			}
+			req.Header.Set("Content-Type", "application/json")
+			applyMozillaHeaders(req)
+			return req, nil
+		})
+		if altErr == nil {
+			altData, _ := io.ReadAll(io.LimitReader(altResp.Body, 16*1024))
+			_ = altResp.Body.Close()
+			if altResp.StatusCode == http.StatusOK {
+				g.log("INFO", "Account creation email verified for %s", pending.Email)
+				return g.CompleteSessionLogin(ctx, pending.Email, extractedUID, pending.SessionToken)
+			}
+			if len(code) > 8 {
+				return nil, nil, fmt.Errorf("email link verification failed (HTTP %d): %s", altResp.StatusCode, string(altData))
+			}
+		}
+	}
+
+	// Case 4: Standard 6-digit OTP code via /v1/session/verify_code
 	bodyJSON, _ := json.Marshal(map[string]string{"code": code})
 	verifyURL := FxaAuthServer + "/session/verify_code"
 
@@ -714,36 +791,12 @@ func (g *GuardianService) VerifyEmailCode(ctx context.Context, code string) (*Sa
 	respData, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
 	_ = resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK && pending.IsSignUp {
-		// Fallback for new account creation verification endpoint
-		altBody, _ := json.Marshal(map[string]string{
-			"uid":  pending.UID,
-			"code": code,
-		})
-		altURL := FxaAuthServer + "/recovery_email/verify_code"
-		altResp, altErr := g.doWithChallenge(ctx, func() (*http.Request, error) {
-			req, err := http.NewRequestWithContext(ctx, http.MethodPost, altURL, bytes.NewReader(altBody))
-			if err != nil {
-				return nil, err
-			}
-			req.Header.Set("Content-Type", "application/json")
-			applyMozillaHeaders(req)
-			return req, nil
-		})
-		if altErr != nil {
-			return nil, nil, altErr
-		}
-		altData, _ := io.ReadAll(io.LimitReader(altResp.Body, 16*1024))
-		_ = altResp.Body.Close()
-		if altResp.StatusCode != http.StatusOK {
-			return nil, nil, fmt.Errorf("email verification failed (HTTP %d): %s", altResp.StatusCode, string(altData))
-		}
-	} else if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK {
 		return nil, nil, fmt.Errorf("verification code rejected (HTTP %d): %s", resp.StatusCode, string(respData))
 	}
 
 	g.log("INFO", "Email verification succeeded for %s", pending.Email)
-	return g.CompleteSessionLogin(ctx, pending.Email, pending.UID, pending.SessionToken)
+	return g.CompleteSessionLogin(ctx, pending.Email, extractedUID, pending.SessionToken)
 }
 
 // CompleteSessionLogin exchanges a verified FxA sessionToken for OAuth tokens and fetches/activates the 50 GB Guardian entitlement.
@@ -1140,21 +1193,26 @@ func (g *GuardianService) FetchServerList(ctx context.Context) ([]Country, error
 	}
 
 	var countries []Country
+	isExcludedCountry := func(c *Country) bool {
+		if c == nil || c.Code == "" || len(c.Cities) == 0 {
+			return true
+		}
+		if strings.EqualFold(c.Code, "REC") || strings.EqualFold(c.Name, "CatchAll Anycast") || strings.Contains(strings.ToLower(c.Name), "recomended") {
+			return true
+		}
+		return false
+	}
 	for _, raw := range envelope.Data {
 		var wrapper struct {
 			Country *Country `json:"country"`
 		}
-		if err := json.Unmarshal(raw, &wrapper); err == nil && wrapper.Country != nil && wrapper.Country.Code != "" {
-			if !strings.EqualFold(wrapper.Country.Name, "CatchAll Anycast") && len(wrapper.Country.Cities) > 0 {
-				countries = append(countries, *wrapper.Country)
-				continue
-			}
+		if err := json.Unmarshal(raw, &wrapper); err == nil && !isExcludedCountry(wrapper.Country) {
+			countries = append(countries, *wrapper.Country)
+			continue
 		}
 		var c Country
-		if err := json.Unmarshal(raw, &c); err == nil && c.Code != "" && len(c.Cities) > 0 {
-			if !strings.EqualFold(c.Name, "CatchAll Anycast") {
-				countries = append(countries, c)
-			}
+		if err := json.Unmarshal(raw, &c); err == nil && !isExcludedCountry(&c) {
+			countries = append(countries, c)
 		}
 	}
 	return countries, nil

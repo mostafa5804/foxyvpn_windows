@@ -31,9 +31,9 @@ import { DEFAULT_SERVERS, vpnBridge } from './utils/wailsBridge';
 import { AuthView } from './components/AuthView';
 import { ServerSelectorModal } from './components/ServerSelectorModal';
 import { SettingsView } from './components/SettingsView';
-import { BuildReleaseView } from './components/BuildReleaseView';
+import { AboutView } from './components/AboutView';
 
-type ActiveSection = 'dashboard' | 'servers' | 'settings' | 'build' | 'auth';
+type ActiveSection = 'dashboard' | 'auth' | 'settings' | 'about';
 
 export default function App() {
   const [isDark, setIsDark] = useState(true);
@@ -56,7 +56,7 @@ export default function App() {
 
   const [settings, setSettings] = useState<ClientSettings>({
     mode: 'tun',
-    tlsSplitMode: 'record',
+    tlsSplitMode: 'sni',
     dohProvider: '1.1.1.1',
     mtu: 1380,
     killSwitch: true,
@@ -105,17 +105,33 @@ export default function App() {
 
   // Poll telemetry when connected
   useEffect(() => {
+    let lastRx = status.downloadedBytes;
+    let lastTx = status.uploadedBytes;
+
     const timer = setInterval(async () => {
       if (status.state === 'Connected') {
-        const simRx = Math.floor(420_000 + Math.random() * 1_850_000);
-        const simTx = Math.floor(85_000 + Math.random() * 340_000);
-        const updated = vpnBridge.tickSimulation(simTx, simRx);
-        setStatus(updated);
-        setRxRate(simRx);
-        setTxRate(simTx);
+        let currentRx = 0;
+        let currentTx = 0;
+        if (vpnBridge.isNative) {
+          const liveStatus = await vpnBridge.getStatus();
+          setStatus(liveStatus);
+          currentRx = Math.max(0, liveStatus.downloadedBytes - lastRx);
+          currentTx = Math.max(0, liveStatus.uploadedBytes - lastTx);
+          lastRx = liveStatus.downloadedBytes;
+          lastTx = liveStatus.uploadedBytes;
+        } else {
+          const simRx = Math.floor(420_000 + Math.random() * 1_850_000);
+          const simTx = Math.floor(85_000 + Math.random() * 340_000);
+          const updated = vpnBridge.tickSimulation(simTx, simRx);
+          setStatus(updated);
+          currentRx = simRx;
+          currentTx = simTx;
+        }
+        setRxRate(currentRx);
+        setTxRate(currentTx);
         setSpeedHistory((prev) => [
           ...prev.slice(1),
-          Math.min(100, Math.max(12, Math.round((simRx / 2_400_000) * 100))),
+          Math.min(100, Math.max(12, Math.round(((currentRx || 300000) / 2_400_000) * 100))),
         ]);
       } else {
         setRxRate(0);
@@ -241,18 +257,6 @@ export default function App() {
 
           <button
             type="button"
-            onClick={() => setShowServerModal(true)}
-            className={`whitespace-nowrap shrink-0 py-1 border-b-2 border-transparent transition-colors cursor-pointer ${
-              isDark
-                ? 'text-slate-400 hover:text-slate-100'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            Edge Servers ({servers.length})
-          </button>
-
-          <button
-            type="button"
             onClick={() => setActiveSection('settings')}
             className={`whitespace-nowrap shrink-0 py-1 border-b-2 transition-colors cursor-pointer ${
               activeSection === 'settings'
@@ -267,16 +271,16 @@ export default function App() {
 
           <button
             type="button"
-            onClick={() => setActiveSection('build')}
+            onClick={() => setActiveSection('about')}
             className={`whitespace-nowrap shrink-0 py-1 border-b-2 transition-colors cursor-pointer ${
-              activeSection === 'build'
+              activeSection === 'about'
                 ? 'border-orange-500 text-orange-400 font-semibold'
                 : isDark
                 ? 'border-transparent text-slate-400 hover:text-slate-100'
                 : 'border-transparent text-slate-600 hover:text-slate-900'
             }`}
           >
-            GitHub CI Build
+            About (v1.0.2)
           </button>
         </nav>
 
@@ -379,7 +383,9 @@ export default function App() {
           />
         )}
 
-        {activeSection === 'build' && <BuildReleaseView isDark={isDark} />}
+        {activeSection === 'about' && (
+          <AboutView isDark={isDark} onOpenSettings={() => setActiveSection('settings')} />
+        )}
 
         {activeSection === 'dashboard' && (
           <>
