@@ -14,6 +14,9 @@ import {
   UserCheck,
   RefreshCw,
   Trash2,
+  Languages,
+  LogOut,
+  Zap,
 } from 'lucide-react';
 import {
   FIFTY_GB_BYTES,
@@ -22,12 +25,14 @@ import {
   formatBytes,
   formatRate,
   formatUptime,
+  AUTO_SERVER,
   type ClientSettings,
   type ConnectionStatus,
   type ServerInfo,
   type UserInfo,
 } from './utils/vpnLogic';
 import { DEFAULT_SERVERS, vpnBridge } from './utils/wailsBridge';
+import { translations, type Language } from './utils/i18n';
 import { AuthView } from './components/AuthView';
 import { ServerSelectorModal } from './components/ServerSelectorModal';
 import { SettingsView } from './components/SettingsView';
@@ -36,22 +41,45 @@ import { AboutView } from './components/AboutView';
 type ActiveSection = 'dashboard' | 'auth' | 'settings' | 'about';
 
 export default function App() {
-  const [isDark, setIsDark] = useState(true);
-  const [activeSection, setActiveSection] = useState<ActiveSection>('dashboard');
-  const [user, setUser] = useState<UserInfo | null>({
-    email: 'mostafa.fxa@firefox.com',
-    uid: 'fxa-89f2c401a',
-    verified: true,
-    requiresVerification: false,
-    subscribed: true,
-    quotaMaxBytes: FIFTY_GB_BYTES,
-    quotaRemainingBytes: Math.floor(FIFTY_GB_BYTES * 0.914),
-    quotaResetEpoch: Math.floor(Date.now() / 1000) + 21 * 86400,
-    tokenPoolCount: 1,
+  // Theme state: Default is Light as requested ("تم پیش فرض هم روشن باشه")
+  const [isDark, setIsDark] = useState<boolean>(() => {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const saved = window.localStorage.getItem('foxyvpn_theme');
+      if (saved) return saved === 'dark';
+    }
+    return false; // Default Light
   });
 
+  // Language state: Default is Persian ('fa') with full English toggle
+  const [lang, setLang] = useState<Language>(() => {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const saved = window.localStorage.getItem('foxyvpn_lang');
+      if (saved === 'en' || saved === 'fa') return saved;
+    }
+    return 'fa';
+  });
+
+  const t = translations[lang];
+
+  const [activeSection, setActiveSection] = useState<ActiveSection>('dashboard');
+
+  // No hardcoded demo account: restored from persistent storage, null if fresh
+  const [user, setUser] = useState<UserInfo | null>(() => vpnBridge.getCurrentUser());
+
   const [servers, setServers] = useState<ServerInfo[]>(DEFAULT_SERVERS);
-  const [selectedServer, setSelectedServer] = useState<ServerInfo>(DEFAULT_SERVERS[0]);
+
+  // Automatic Server selection as the smart default
+  const [selectedServer, setSelectedServer] = useState<ServerInfo>(() => {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const savedId = window.localStorage.getItem('foxyvpn_server_id');
+      if (savedId) {
+        const found = DEFAULT_SERVERS.find((s) => s.id === savedId);
+        if (found) return found;
+      }
+    }
+    return AUTO_SERVER; // Default Auto
+  });
+
   const [showServerModal, setShowServerModal] = useState(false);
 
   const [settings, setSettings] = useState<ClientSettings>({
@@ -67,27 +95,49 @@ export default function App() {
   const [status, setStatus] = useState<ConnectionStatus>({
     state: 'Disconnected',
     mode: 'tun',
-    serverId: DEFAULT_SERVERS[0].id,
-    serverLabel: `${DEFAULT_SERVERS[0].countryName} — ${DEFAULT_SERVERS[0].cityName}`,
+    serverId: AUTO_SERVER.id,
+    serverLabel: `${AUTO_SERVER.countryName} — ${AUTO_SERVER.cityName}`,
     uptimeSeconds: 0,
     uploadedBytes: 0,
     downloadedBytes: 0,
-    pingMs: DEFAULT_SERVERS[0].latencyMs,
+    pingMs: AUTO_SERVER.latencyMs,
     exitIp: '—',
     exitCountry: '—',
     exitVerified: false,
-    quotaMaxBytes: FIFTY_GB_BYTES,
-    quotaRemainingBytes: Math.floor(FIFTY_GB_BYTES * 0.914),
+    quotaMaxBytes: user ? user.quotaMaxBytes : FIFTY_GB_BYTES,
+    quotaRemainingBytes: user ? user.quotaRemainingBytes : FIFTY_GB_BYTES,
   });
 
   const [rxRate, setRxRate] = useState(0);
   const [txRate, setTxRate] = useState(0);
   const [speedHistory, setSpeedHistory] = useState<number[]>(
-    Array.from({ length: 24 }, () => 8)
+    Array.from({ length: 24 }, () => 6)
   );
   const [logs, setLogs] = useState<string[]>([]);
   const [logsExpanded, setLogsExpanded] = useState(true);
 
+  // Theme & Language persistence
+  const toggleTheme = () => {
+    setIsDark((prev) => {
+      const next = !prev;
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem('foxyvpn_theme', next ? 'dark' : 'light');
+      }
+      return next;
+    });
+  };
+
+  const toggleLanguage = () => {
+    setLang((prev) => {
+      const next: Language = prev === 'fa' ? 'en' : 'fa';
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem('foxyvpn_lang', next);
+      }
+      return next;
+    });
+  };
+
+  // Initial load of servers and logs
   useEffect(() => {
     let mounted = true;
     vpnBridge.getServers().then((list) => {
@@ -101,6 +151,19 @@ export default function App() {
     return () => {
       mounted = false;
     };
+  }, []);
+
+  // Sync user state with vpnBridge
+  useEffect(() => {
+    const u = vpnBridge.getCurrentUser();
+    if (u) {
+      setUser(u);
+      setStatus((prev) => ({
+        ...prev,
+        quotaMaxBytes: u.quotaMaxBytes,
+        quotaRemainingBytes: u.quotaRemainingBytes,
+      }));
+    }
   }, []);
 
   // Poll telemetry when connected
@@ -165,6 +228,9 @@ export default function App() {
 
   const handleSelectServer = async (srv: ServerInfo) => {
     setSelectedServer(srv);
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem('foxyvpn_server_id', srv.id);
+    }
     if (status.state === 'Connected') {
       await vpnBridge.connect(srv.id, settings.mode);
       const s = await vpnBridge.getStatus();
@@ -193,6 +259,18 @@ export default function App() {
     setLogs(await vpnBridge.getLogs());
   };
 
+  const handleSignOut = async () => {
+    await vpnBridge.logout();
+    setUser(null);
+    setStatus((prev) => ({
+      ...prev,
+      state: 'Disconnected',
+      quotaMaxBytes: FIFTY_GB_BYTES,
+      quotaRemainingBytes: FIFTY_GB_BYTES,
+    }));
+    setActiveSection('dashboard');
+  };
+
   const quota = calculateQuotaSummary(
     status.quotaMaxBytes,
     status.quotaRemainingBytes
@@ -200,16 +278,19 @@ export default function App() {
 
   return (
     <div
+      dir={lang === 'fa' ? 'rtl' : 'ltr'}
       className={`min-h-screen transition-colors ${
+        lang === 'fa' ? 'font-vazirmatn' : 'font-sans'
+      } ${
         isDark ? 'bg-[#0B0F17] text-slate-100' : 'bg-[#F8FAFC] text-slate-900'
       }`}
     >
-      {/* Top Bar Contract: 3 Zones (Brand Wordmark | 5 Single-Line Nav Links | 1 Primary Action) */}
+      {/* Top Bar: Brand Wordmark | Navigation Tabs | Actions (Theme, Language, Quick Connect) */}
       <header
-        className={`flex flex-wrap items-center justify-between gap-y-3 gap-x-8 px-6 py-4 border-b ${
+        className={`flex flex-wrap items-center justify-between gap-y-3 gap-x-6 px-6 py-4 border-b ${
           isDark
             ? 'bg-slate-950/80 border-slate-800/80'
-            : 'bg-white border-slate-200'
+            : 'bg-white border-slate-200 shadow-xs'
         }`}
       >
         <a
@@ -218,27 +299,28 @@ export default function App() {
             e.preventDefault();
             setActiveSection('dashboard');
           }}
-          className="text-base font-bold tracking-tight whitespace-nowrap shrink-0 order-1"
+          className="text-base font-bold tracking-tight whitespace-nowrap shrink-0 order-1 flex items-center gap-2"
         >
-          FoxyVPN Windows
+          <img src="/appicon.png" alt="Logo" className="w-6 h-6 rounded-lg" />
+          <span>{t.appName}</span>
         </a>
 
         <nav
           aria-label="Primary Workspace Navigation"
-          className="w-full md:w-auto order-3 md:order-2 flex items-center gap-5 sm:gap-6 text-xs sm:text-sm font-medium overflow-x-auto pb-1 md:pb-0"
+          className="w-full md:w-auto order-3 md:order-2 flex items-center gap-5 sm:gap-6 text-xs sm:text-sm font-semibold overflow-x-auto pb-1 md:pb-0"
         >
           <button
             type="button"
             onClick={() => setActiveSection('dashboard')}
             className={`whitespace-nowrap shrink-0 py-1 border-b-2 transition-colors cursor-pointer ${
               activeSection === 'dashboard'
-                ? 'border-orange-500 text-orange-400 font-semibold'
+                ? 'border-orange-500 text-orange-500 font-bold'
                 : isDark
                 ? 'border-transparent text-slate-400 hover:text-slate-100'
                 : 'border-transparent text-slate-600 hover:text-slate-900'
             }`}
           >
-            Dashboard
+            {t.dashboard}
           </button>
 
           <button
@@ -246,13 +328,13 @@ export default function App() {
             onClick={() => setActiveSection('auth')}
             className={`whitespace-nowrap shrink-0 py-1 border-b-2 transition-colors cursor-pointer ${
               activeSection === 'auth'
-                ? 'border-orange-500 text-orange-400 font-semibold'
+                ? 'border-orange-500 text-orange-500 font-bold'
                 : isDark
                 ? 'border-transparent text-slate-400 hover:text-slate-100'
                 : 'border-transparent text-slate-600 hover:text-slate-900'
             }`}
           >
-            Sign In / Register
+            {t.auth}
           </button>
 
           <button
@@ -260,13 +342,13 @@ export default function App() {
             onClick={() => setActiveSection('settings')}
             className={`whitespace-nowrap shrink-0 py-1 border-b-2 transition-colors cursor-pointer ${
               activeSection === 'settings'
-                ? 'border-orange-500 text-orange-400 font-semibold'
+                ? 'border-orange-500 text-orange-500 font-bold'
                 : isDark
                 ? 'border-transparent text-slate-400 hover:text-slate-100'
                 : 'border-transparent text-slate-600 hover:text-slate-900'
             }`}
           >
-            Tunnel Settings
+            {t.settings}
           </button>
 
           <button
@@ -274,89 +356,126 @@ export default function App() {
             onClick={() => setActiveSection('about')}
             className={`whitespace-nowrap shrink-0 py-1 border-b-2 transition-colors cursor-pointer ${
               activeSection === 'about'
-                ? 'border-orange-500 text-orange-400 font-semibold'
+                ? 'border-orange-500 text-orange-500 font-bold'
                 : isDark
                 ? 'border-transparent text-slate-400 hover:text-slate-100'
                 : 'border-transparent text-slate-600 hover:text-slate-900'
             }`}
           >
-            About (v1.0.2)
+            {t.about}
           </button>
         </nav>
 
-        <div className="flex items-center gap-3 shrink-0 order-2 md:order-3">
+        <div className="flex items-center gap-2.5 shrink-0 order-2 md:order-3">
+          {/* Theme Toggle (Light / Dark) */}
+          <button
+            type="button"
+            aria-label={isDark ? t.lightTheme : t.darkTheme}
+            onClick={toggleTheme}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border cursor-pointer transition-colors ${
+              isDark
+                ? 'bg-slate-900 border-slate-800 text-slate-200 hover:text-white'
+                : 'bg-slate-50 border-slate-200 text-slate-700 hover:text-slate-900'
+            }`}
+          >
+            {isDark ? (
+              <Sun className="w-3.5 h-3.5 text-amber-400" />
+            ) : (
+              <Moon className="w-3.5 h-3.5 text-slate-700" />
+            )}
+            <span className="hidden sm:inline">{isDark ? t.lightTheme : t.darkTheme}</span>
+          </button>
+
+          {/* Language Toggle (FA / EN) placed right beside theme button */}
+          <button
+            type="button"
+            aria-label="Switch Language"
+            onClick={toggleLanguage}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border cursor-pointer transition-colors ${
+              isDark
+                ? 'bg-slate-900 border-slate-800 text-slate-200 hover:text-white'
+                : 'bg-slate-50 border-slate-200 text-slate-700 hover:text-slate-900'
+            }`}
+          >
+            <Languages className="w-3.5 h-3.5 text-orange-400" />
+            <span>{t.languageToggle}</span>
+          </button>
+
+          {/* Primary Quick Connect Action */}
           <button
             type="button"
             onClick={handleToggleConnection}
-            className={`px-4 py-2 text-xs font-semibold rounded-xl transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`px-4 py-2 text-xs font-bold rounded-xl transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-sm ${
               status.state === 'Connected'
-                ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
-                : 'bg-orange-500 hover:bg-orange-600 text-white'
+                ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20'
+                : 'bg-orange-500 hover:bg-orange-600 text-white shadow-orange-500/25'
             }`}
           >
-            {status.state === 'Connected' ? 'Disconnect Tunnel' : 'Quick Connect'}
+            {status.state === 'Connected' ? t.disconnectTunnel : t.quickConnect}
           </button>
         </div>
       </header>
 
-      {/* Main Content Container */}
+      {/* Main Content Area */}
       <main className="max-w-7xl mx-auto px-6 py-6 space-y-6">
-        {/* Contextual Workspace Toolbar */}
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-3 text-xs">
-            <UserCheck className="w-4 h-4 text-orange-400" />
+        {/* Contextual Account Status Toolbar */}
+        <div
+          className={`flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-2xl border text-xs ${
+            isDark
+              ? 'bg-slate-900/60 border-slate-800/80 text-slate-300'
+              : 'bg-white border-slate-200 text-slate-700 shadow-xs'
+          }`}
+        >
+          <div className="flex items-center gap-2.5">
+            <UserCheck className="w-4 h-4 text-orange-400 shrink-0" />
             {user ? (
               <div className="flex flex-wrap items-center gap-2">
-                <span className="font-semibold">{user.email}</span>
+                <span className="font-bold text-sm">{user.email}</span>
                 <span aria-hidden="true">·</span>
                 <span className={isDark ? 'text-slate-400' : 'text-slate-500'}>
-                  Mozilla Guardian 50 GB Plan Active
+                  {t.planActive}
                 </span>
                 <span>·</span>
                 <button
                   type="button"
                   onClick={() => setActiveSection('auth')}
-                  className="text-orange-400 hover:text-orange-300 underline font-medium cursor-pointer"
+                  className="text-orange-400 hover:text-orange-300 underline font-semibold cursor-pointer"
                 >
-                  Switch or Create Account
+                  {t.switchOrAddAccount}
                 </button>
               </div>
             ) : (
               <div className="flex items-center gap-2">
-                <span className="text-amber-400">Not signed in</span>
+                <span className="text-amber-500 font-bold">{t.notSignedIn}</span>
                 <span>·</span>
                 <button
                   type="button"
                   onClick={() => setActiveSection('auth')}
-                  className="text-orange-400 hover:text-orange-300 underline font-medium cursor-pointer"
+                  className="text-orange-400 hover:text-orange-300 underline font-semibold cursor-pointer"
                 >
-                  Sign In or Register Free Account
+                  {t.signInOrRegister}
                 </button>
               </div>
             )}
           </div>
 
-          <div className="flex items-center gap-2">
+          {user && (
             <button
               type="button"
-              aria-label={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-              onClick={() => setIsDark(!isDark)}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium border cursor-pointer ${
-                isDark
-                  ? 'bg-slate-900 border-slate-800 text-slate-300 hover:text-white'
-                  : 'bg-white border-slate-200 text-slate-700 hover:text-slate-900'
-              }`}
+              onClick={handleSignOut}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold text-rose-400 hover:bg-rose-500/10 cursor-pointer transition-colors"
             >
-              {isDark ? <Sun className="w-3.5 h-3.5 text-amber-400" /> : <Moon className="w-3.5 h-3.5 text-slate-700" />}
-              <span>{isDark ? 'Light Theme' : 'Dark Theme'}</span>
+              <LogOut className="w-3.5 h-3.5" />
+              <span>{t.signOut}</span>
             </button>
-          </div>
+          )}
         </div>
 
-        {/* Active View Routing */}
+        {/* View Switcher */}
         {activeSection === 'auth' && (
           <AuthView
             isDark={isDark}
+            lang={lang}
             onAuthenticated={(authenticatedUser) => {
               setUser(authenticatedUser);
               setStatus((prev) => ({
@@ -373,6 +492,7 @@ export default function App() {
           <SettingsView
             settings={settings}
             isDark={isDark}
+            lang={lang}
             onSave={async (updated) => {
               setSettings(updated);
               await vpnBridge.updateSettings(updated);
@@ -384,26 +504,30 @@ export default function App() {
         )}
 
         {activeSection === 'about' && (
-          <AboutView isDark={isDark} onOpenSettings={() => setActiveSection('settings')} />
+          <AboutView
+            isDark={isDark}
+            lang={lang}
+            onOpenSettings={() => setActiveSection('settings')}
+          />
         )}
 
         {activeSection === 'dashboard' && (
           <>
-            {/* Bento Grid Row 1: Primary Connection Control + Server & Mode + 50 GB Monthly Allowance */}
+            {/* Bento Grid Row 1: Primary Connection Switch + Fastly Edge & Mode + 50 GB Quota */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
-              {/* Primary Visual Anchor: Connection Switch Card (5 cols) */}
+              {/* Primary Anchor: Connection Switch Card (5 cols) */}
               <section
                 aria-label="VPN Connection Control"
                 className={`lg:col-span-5 rounded-2xl border p-6 flex flex-col justify-between ${
                   isDark
                     ? 'bg-slate-900/85 border-slate-800'
-                    : 'bg-white border-slate-200'
+                    : 'bg-white border-slate-200 shadow-sm'
                 }`}
               >
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="text-xs font-medium text-slate-400">
-                      Tunnel Status
+                    <div className="text-xs font-semibold text-slate-400">
+                      {t.tunnelStatus}
                     </div>
                     <div className="flex items-center gap-2 mt-0.5">
                       <span
@@ -417,18 +541,22 @@ export default function App() {
                             : 'text-slate-800'
                         }`}
                       >
-                        {status.state}
+                        {status.state === 'Connected'
+                          ? t.connected
+                          : status.state === 'Connecting...'
+                          ? t.connecting
+                          : t.disconnected}
                       </span>
                       <span className="text-slate-500">·</span>
-                      <span className="font-mono tabular-nums text-xs text-slate-400">
+                      <span className="font-mono tabular-nums text-xs text-slate-400" dir="ltr">
                         {formatUptime(status.uptimeSeconds)}
                       </span>
                     </div>
                   </div>
 
-                  <div className="text-right text-xs">
-                    <span className="text-slate-400">Adapter Mode</span>
-                    <div className="font-mono font-semibold text-orange-400">
+                  <div className="text-end text-xs">
+                    <span className="text-slate-400">{t.adapterMode}</span>
+                    <div className="font-mono font-bold text-orange-400">
                       {status.mode === 'tun' ? 'Wintun TUN' : 'WinINET Proxy'}
                     </div>
                   </div>
@@ -438,29 +566,25 @@ export default function App() {
                 <div className="my-8 flex flex-col items-center justify-center">
                   <button
                     type="button"
-                    aria-label={
-                      status.state === 'Connected'
-                        ? 'Disconnect VPN Tunnel'
-                        : 'Connect VPN Tunnel'
-                    }
+                    aria-label={status.state === 'Connected' ? t.disconnectTunnel : t.quickConnect}
                     onClick={handleToggleConnection}
-                    className={`w-36 h-36 rounded-full flex flex-col items-center justify-center gap-2 border-4 transition-transform active:scale-95 cursor-pointer ${
+                    className={`w-36 h-36 rounded-full flex flex-col items-center justify-center gap-2 border-4 transition-all active:scale-95 cursor-pointer ${
                       status.state === 'Connected'
-                        ? 'bg-emerald-500/15 border-emerald-500 text-emerald-300 shadow-lg shadow-emerald-500/15'
+                        ? 'bg-emerald-500/15 border-emerald-500 text-emerald-300 shadow-xl shadow-emerald-500/20'
                         : status.state === 'Connecting...'
-                        ? 'bg-amber-500/15 border-amber-500 text-amber-300'
+                        ? 'bg-amber-500/15 border-amber-500 text-amber-300 animate-pulse'
                         : isDark
-                        ? 'bg-slate-950 border-slate-700 hover:border-orange-500 text-slate-200'
-                        : 'bg-slate-100 border-slate-300 hover:border-orange-500 text-slate-800'
+                        ? 'bg-slate-950 border-slate-700 hover:border-orange-500 text-slate-200 shadow-lg'
+                        : 'bg-slate-100 border-slate-300 hover:border-orange-500 text-slate-800 shadow-md'
                     }`}
                   >
                     <Power className="w-10 h-10" />
                     <span className="text-xs font-bold tracking-wide">
                       {status.state === 'Connected'
-                        ? 'Connected'
+                        ? t.connected
                         : status.state === 'Connecting...'
-                        ? 'Dialing...'
-                        : 'Tap to Connect'}
+                        ? t.dialing
+                        : t.tapToConnect}
                     </span>
                   </button>
                 </div>
@@ -478,18 +602,18 @@ export default function App() {
                       }`}
                     />
                     <span className={isDark ? 'text-slate-400' : 'text-slate-500'}>
-                      Exit IP (Cloudflare Trace):
+                      {t.exitVerifiedNotice}
                     </span>
                   </div>
-                  <span className="font-mono tabular-nums font-semibold">
+                  <span className="font-mono tabular-nums font-bold" dir="ltr">
                     {status.exitVerified
                       ? `${status.exitIp} (${status.exitCountry})`
-                      : 'Not Tunneled'}
+                      : t.notTunneled}
                   </span>
                 </div>
               </section>
 
-              {/* Right 7 Cols: Server Selector + Mode Switcher + 50 GB Monthly Allowance */}
+              {/* Right 7 Cols: Server Selector & Mode + 50 GB Monthly Allowance */}
               <div className="lg:col-span-7 flex flex-col justify-between gap-6">
                 {/* Active Fastly Edge Location & Tunnel Mode Selector */}
                 <section
@@ -497,7 +621,7 @@ export default function App() {
                   className={`rounded-2xl border p-6 space-y-4 ${
                     isDark
                       ? 'bg-slate-900/85 border-slate-800'
-                      : 'bg-white border-slate-200'
+                      : 'bg-white border-slate-200 shadow-sm'
                   }`}
                 >
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -506,15 +630,22 @@ export default function App() {
                         {countryCodeToFlag(selectedServer.countryCode)}
                       </span>
                       <div>
-                        <div className="text-xs text-slate-400">
-                          Fastly Edge Endpoint
+                        <div className="text-xs text-slate-400 flex items-center gap-1.5">
+                          <span>{lang === 'fa' ? 'نود اتصال Fastly' : 'Fastly Edge Endpoint'}</span>
+                          {selectedServer.id === 'auto' && (
+                            <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-orange-500/15 text-orange-400 border border-orange-500/30">
+                              AUTO
+                            </span>
+                          )}
                         </div>
                         <div className="text-base font-bold tracking-tight">
-                          {selectedServer.countryName} — {selectedServer.cityName}
+                          {selectedServer.id === 'auto'
+                            ? t.autoServerTitle
+                            : `${selectedServer.countryName} — ${selectedServer.cityName}`}
                         </div>
-                        <div className="text-xs font-mono text-slate-400">
+                        <div className="text-xs font-mono text-slate-400" dir="ltr">
                           {selectedServer.host}:{selectedServer.port} ·{' '}
-                          <span className="text-emerald-400 tabular-nums">
+                          <span className="text-emerald-400 tabular-nums font-bold">
                             {selectedServer.latencyMs} ms
                           </span>
                         </div>
@@ -524,14 +655,14 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => setShowServerModal(true)}
-                      className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold border transition-colors whitespace-nowrap cursor-pointer ${
+                      className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold border transition-colors whitespace-nowrap cursor-pointer ${
                         isDark
                           ? 'bg-slate-950 border-slate-700 hover:border-orange-500 text-slate-100'
                           : 'bg-slate-50 border-slate-300 hover:border-orange-500 text-slate-900'
                       }`}
                     >
                       <Globe className="w-4 h-4 text-orange-400" />
-                      <span>Change Location</span>
+                      <span>{t.changeLocation}</span>
                     </button>
                   </div>
 
@@ -542,11 +673,9 @@ export default function App() {
                     }`}
                   >
                     <div className="text-xs">
-                      <span className="font-semibold">Routing Engine:</span>{' '}
+                      <span className="font-bold">{t.routingEngine}</span>{' '}
                       <span className={isDark ? 'text-slate-400' : 'text-slate-500'}>
-                        {settings.mode === 'tun'
-                          ? 'Wintun Layer-3 Adapter (10.0.0.2/24) + DoH'
-                          : 'SOCKS5 (127.0.0.1:1080) + WinINET Registry'}
+                        {settings.mode === 'tun' ? t.wintunTunMode : t.systemProxyMode}
                       </span>
                     </div>
 
@@ -562,7 +691,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => handleModeQuickSwitch('tun')}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors whitespace-nowrap cursor-pointer ${
                           settings.mode === 'tun'
                             ? 'bg-orange-500 text-white'
                             : isDark
@@ -575,7 +704,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => handleModeQuickSwitch('proxy')}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors whitespace-nowrap cursor-pointer ${
                           settings.mode === 'proxy'
                             ? 'bg-orange-500 text-white'
                             : isDark
@@ -589,210 +718,206 @@ export default function App() {
                   </div>
                 </section>
 
-                {/* 50 GB Monthly Allowance Gauge Card */}
+                {/* 50 GB Monthly Allowance Progress Card */}
                 <section
-                  aria-label="Monthly 50 GB Traffic Quota"
+                  aria-label="Monthly Quota Card"
                   className={`rounded-2xl border p-6 space-y-4 ${
                     isDark
                       ? 'bg-slate-900/85 border-slate-800'
-                      : 'bg-white border-slate-200'
+                      : 'bg-white border-slate-200 shadow-sm'
                   }`}
                 >
                   <div className="flex items-center justify-between">
                     <div>
-                      <h3 className="text-sm font-bold tracking-tight">
-                        Mozilla Guardian Monthly Traffic Allowance
-                      </h3>
+                      <h2 className="text-sm font-bold tracking-tight">
+                        {t.monthlyAllowanceTitle}
+                      </h2>
                       <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                        Free 50 GB/month browser VPN quota · Auto-refreshes JWT ProxyPass
+                        {t.monthlyAllowanceSubtitle}
                       </p>
                     </div>
-                    <div className="text-right font-mono tabular-nums">
-                      <span className="text-base font-bold text-orange-400">
-                        {quota.remainingGB} GB
-                      </span>
-                      <span className="text-xs text-slate-400">
-                        {' '}
-                        / {quota.totalGB} GB left
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Progress Bar */}
-                  <div
-                    className={`w-full h-3 rounded-full overflow-hidden ${
-                      isDark ? 'bg-slate-950' : 'bg-slate-200'
-                    }`}
-                  >
-                    <div
-                      className={`h-full transition-all duration-300 ${
-                        quota.healthState === 'critical'
-                          ? 'bg-red-500'
+                    <span
+                      className={`px-2.5 py-1 rounded-full text-xs font-bold border ${
+                        quota.healthState === 'nominal'
+                          ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
                           : quota.healthState === 'warning'
-                          ? 'bg-amber-500'
-                          : 'bg-emerald-500'
+                          ? 'bg-amber-500/15 border-amber-500/30 text-amber-400'
+                          : 'bg-rose-500/15 border-rose-500/30 text-rose-400'
                       }`}
-                      style={{ width: `${Math.max(4, quota.remainingPercent)}%` }}
-                    />
+                    >
+                      {quota.remainingGB} GB {t.leftOfTotal} {quota.totalGB} GB
+                    </span>
                   </div>
 
-                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400 font-mono tabular-nums">
-                    <span>Used this cycle: {quota.usedGB} GB ({quota.usedPercent}%)</span>
-                    <span>·</span>
-                    <span>
-                      TLS Split: {settings.tlsSplitMode.toUpperCase()} · DoH: {settings.dohProvider}
-                    </span>
+                  <div className="space-y-1.5">
+                    <div
+                      className={`h-3 rounded-full overflow-hidden p-0.5 border ${
+                        isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-200'
+                      }`}
+                    >
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ${
+                          quota.healthState === 'nominal'
+                            ? 'bg-gradient-to-r from-emerald-500 to-teal-400'
+                            : quota.healthState === 'warning'
+                            ? 'bg-gradient-to-r from-amber-500 to-orange-400'
+                            : 'bg-gradient-to-r from-rose-500 to-red-400'
+                        }`}
+                        style={{ width: `${Math.min(100, quota.usedPercent)}%` }}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between text-xs font-mono text-slate-400" dir="ltr">
+                      <span>{t.usedThisCycle} {quota.usedGB} GB ({quota.usedPercent}%)</span>
+                      <span className="font-bold text-slate-200">{quota.remainingPercent}% Available</span>
+                    </div>
                   </div>
                 </section>
               </div>
             </div>
 
-            {/* Bento Grid Row 2: Live Throughput Telemetry & Sparkline */}
-            <section
-              aria-label="Live Network Throughput"
-              className={`rounded-2xl border p-6 ${
-                isDark
-                  ? 'bg-slate-900/85 border-slate-800'
-                  : 'bg-white border-slate-200'
-              }`}
-            >
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-6 items-center">
-                <div className="space-y-1">
-                  <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                    <ArrowDownLeft className="w-4 h-4 text-emerald-400" />
-                    <span>Download Rate</span>
+            {/* Bento Grid Row 2: Live Network Telemetry & Diagnostics Log */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+              {/* Left 6 cols: Live Throughput Graph */}
+              <section
+                aria-label="Throughput Monitoring"
+                className={`lg:col-span-6 rounded-2xl border p-6 flex flex-col justify-between space-y-4 ${
+                  isDark
+                    ? 'bg-slate-900/85 border-slate-800'
+                    : 'bg-white border-slate-200 shadow-sm'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-sm font-bold tracking-tight">
+                      {t.realtimeThroughput}
+                    </h2>
+                    <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                      {t.pingRtt} <span className="font-mono font-bold text-emerald-400">{status.pingMs} ms</span>
+                    </p>
                   </div>
-                  <div className="font-mono tabular-nums text-xl font-bold">
-                    {formatRate(rxRate)}
-                  </div>
-                  <div className="font-mono tabular-nums text-xs text-slate-400">
-                    Session RX: {formatBytes(status.downloadedBytes)}
-                  </div>
-                </div>
 
-                <div className="space-y-1">
-                  <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                    <ArrowUpRight className="w-4 h-4 text-orange-400" />
-                    <span>Upload Rate</span>
-                  </div>
-                  <div className="font-mono tabular-nums text-xl font-bold">
-                    {formatRate(txRate)}
-                  </div>
-                  <div className="font-mono tabular-nums text-xs text-slate-400">
-                    Session TX: {formatBytes(status.uploadedBytes)}
-                  </div>
-                </div>
-
-                <div className="md:col-span-2">
-                  <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
-                    <span>Real-Time HTTP/2 Stream Throughput</span>
-                    <span className="font-mono tabular-nums">
-                      Ping RTT: {status.pingMs} ms
-                    </span>
-                  </div>
-                  <div className="h-14 flex items-end gap-1">
-                    {speedHistory.map((val, idx) => (
-                      <div
-                        key={idx}
-                        className={`flex-1 rounded-t transition-all duration-300 ${
-                          status.state === 'Connected'
-                            ? 'bg-emerald-500/70'
-                            : isDark
-                            ? 'bg-slate-800'
-                            : 'bg-slate-200'
-                        }`}
-                        style={{ height: `${ status.state === 'Connected' ? val : 12 }%` }}
-                      />
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            {/* Bento Grid Row 3: Collapsible Connection Logs Console */}
-            <section
-              aria-label="Connection Diagnostics Log Console"
-              className={`rounded-2xl border overflow-hidden ${
-                isDark
-                  ? 'bg-slate-900/90 border-slate-800'
-                  : 'bg-white border-slate-200'
-              }`}
-            >
-              <div className="px-6 py-4 flex items-center justify-between">
-                <button
-                  type="button"
-                  aria-expanded={logsExpanded}
-                  onClick={() => setLogsExpanded(!logsExpanded)}
-                  className="flex items-center gap-2.5 text-sm font-semibold cursor-pointer"
-                >
-                  <Terminal className="w-4 h-4 text-orange-400" />
-                  <span>Wintun & Guardian Control-Plane Logs ({logs.length})</span>
-                  {logsExpanded ? (
-                    <ChevronUp className="w-4 h-4 text-slate-400" />
-                  ) : (
-                    <ChevronDown className="w-4 h-4 text-slate-400" />
-                  )}
-                </button>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={async () => setLogs(await vpnBridge.getLogs())}
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border cursor-pointer ${
-                      isDark
-                        ? 'border-slate-700 text-slate-300 hover:bg-slate-800'
-                        : 'border-slate-300 text-slate-700 hover:bg-slate-100'
-                    }`}
-                  >
-                    <RefreshCw className="w-3 h-3" />
-                    <span>Refresh</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      vpnBridge.clearLogs();
-                      setLogs(await vpnBridge.getLogs());
-                    }}
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border cursor-pointer ${
-                      isDark
-                        ? 'border-slate-700 text-slate-300 hover:bg-slate-800'
-                        : 'border-slate-300 text-slate-700 hover:bg-slate-100'
-                    }`}
-                  >
-                    <Trash2 className="w-3 h-3" />
-                    <span>Clear</span>
-                  </button>
-                </div>
-              </div>
-
-              {logsExpanded && (
-                <div
-                  className={`px-6 pb-5 pt-2 border-t font-mono text-xs space-y-1.5 max-h-56 overflow-y-auto ${
-                    isDark
-                      ? 'bg-slate-950/90 border-slate-800 text-slate-300'
-                      : 'bg-slate-900 border-slate-200 text-slate-200'
-                  }`}
-                >
-                  {logs.map((entry, idx) => (
-                    <div key={idx} className="leading-relaxed break-all">
-                      {entry}
+                  <div className="flex items-center gap-3 text-xs font-mono" dir="ltr">
+                    <div className="flex items-center gap-1.5 text-emerald-400">
+                      <ArrowDownLeft className="w-4 h-4" />
+                      <span className="font-bold">{formatRate(rxRate)}</span>
                     </div>
+                    <div className="flex items-center gap-1.5 text-purple-400">
+                      <ArrowUpRight className="w-4 h-4" />
+                      <span className="font-bold">{formatRate(txRate)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Sparkline Canvas */}
+                <div
+                  className={`h-28 rounded-xl border p-2 flex items-end gap-1.5 overflow-hidden ${
+                    isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-50 border-slate-200'
+                  }`}
+                  dir="ltr"
+                >
+                  {speedHistory.map((val, i) => (
+                    <div
+                      key={i}
+                      className="flex-1 rounded-sm bg-gradient-to-t from-orange-500/30 to-orange-400 transition-all duration-300"
+                      style={{ height: `${val}%` }}
+                    />
                   ))}
                 </div>
-              )}
-            </section>
+
+                <div className="flex items-center justify-between text-xs font-mono text-slate-400" dir="ltr">
+                  <span>{t.sessionRx} {formatBytes(status.downloadedBytes)}</span>
+                  <span>{t.sessionTx} {formatBytes(status.uploadedBytes)}</span>
+                </div>
+              </section>
+
+              {/* Right 6 cols: Control-Plane Diagnostics Console */}
+              <section
+                aria-label="Diagnostic Logs"
+                className={`lg:col-span-6 rounded-2xl border p-6 flex flex-col justify-between space-y-3 ${
+                  isDark
+                    ? 'bg-slate-900/85 border-slate-800'
+                    : 'bg-white border-slate-200 shadow-sm'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Terminal className="w-4 h-4 text-orange-400" />
+                    <h2 className="text-sm font-bold tracking-tight">
+                      {t.logsTitle}
+                    </h2>
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const l = await vpnBridge.getLogs();
+                        setLogs(l);
+                      }}
+                      className="p-1 rounded-lg text-slate-400 hover:text-slate-100 cursor-pointer"
+                      title={t.refresh}
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setLogs([])}
+                      className="p-1 rounded-lg text-slate-400 hover:text-rose-400 cursor-pointer"
+                      title={t.clear}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Console Log Terminal */}
+                <div
+                  className={`h-40 rounded-xl p-3 font-mono text-[11px] overflow-y-auto space-y-1 border ${
+                    isDark
+                      ? 'bg-slate-950 border-slate-800 text-slate-300'
+                      : 'bg-slate-950 border-slate-800 text-slate-200'
+                  }`}
+                  dir="ltr"
+                >
+                  {logs.length === 0 ? (
+                    <div className="text-slate-500 italic">No logs recorded yet.</div>
+                  ) : (
+                    logs.map((line, idx) => (
+                      <div
+                        key={idx}
+                        className={
+                          line.includes('[ERROR]')
+                            ? 'text-rose-400'
+                            : line.includes('[WARN ]')
+                            ? 'text-amber-400'
+                            : 'text-slate-300'
+                        }
+                      >
+                        {line}
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <div className="text-end text-[11px] font-mono text-slate-400">
+                  Wintun v0.14.1 · HTTP/2 Multiplexed Tunnel
+                </div>
+              </section>
+            </div>
           </>
         )}
       </main>
 
-      {/* Server Selector Modal */}
+      {/* Server Selection Modal */}
       {showServerModal && (
         <ServerSelectorModal
           servers={servers}
           selectedServerId={selectedServer.id}
+          isDark={isDark}
+          lang={lang}
           onSelect={handleSelectServer}
           onClose={() => setShowServerModal(false)}
-          isDark={isDark}
+          onRefreshServers={(updated) => setServers(updated)}
         />
       )}
     </div>

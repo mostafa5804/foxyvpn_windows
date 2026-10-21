@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -510,6 +511,26 @@ func (a *App) GetLogs() []string {
 	out := make([]string, len(a.logs))
 	copy(out, a.logs)
 	return out
+}
+
+// PingServer measures the real round-trip TCP connect latency to a Fastly edge server.
+func (a *App) PingServer(host string) (int64, error) {
+	t0 := time.Now()
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, "2499"), 2*time.Second)
+	if err != nil {
+		conn2, err2 := net.DialTimeout("tcp", net.JoinHostPort(host, "443"), 2*time.Second)
+		if err2 != nil {
+			return 0, err2
+		}
+		_ = conn2.Close()
+	} else {
+		_ = conn.Close()
+	}
+	ms := time.Since(t0).Milliseconds()
+	if ms <= 0 {
+		ms = 1
+	}
+	return ms, nil
 }
 
 func defaultFallbackServers() []ServerInfo {

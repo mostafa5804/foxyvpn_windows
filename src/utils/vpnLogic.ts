@@ -133,16 +133,95 @@ export interface ValidationResult {
   error?: string;
 }
 
+export function extractTokenOrCodeFromUrl(input: string): { type: 'code' | 'token' | 'bearer' | 'raw'; value: string } {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return { type: 'raw', value: '' };
+  }
+
+  // Check if it's a URL
+  if (/^https?:\/\//i.test(trimmed) || /^[a-zA-Z0-9_-]+:\/\//i.test(trimmed)) {
+    try {
+      const url = new URL(trimmed.replace(/^foxyvpn:\/\//i, 'https://dummy.local/'));
+      // Search params first
+      const codeParam = url.searchParams.get('code') || url.searchParams.get('verification_code');
+      if (codeParam) {
+        return { type: 'code', value: codeParam };
+      }
+      const tokenParam = url.searchParams.get('token') || url.searchParams.get('sessionToken') || url.searchParams.get('access_token');
+      if (tokenParam) {
+        return { type: 'token', value: tokenParam };
+      }
+
+      // Check hash fragment (#token=... or #code=...)
+      if (url.hash) {
+        const hashParams = new URLSearchParams(url.hash.replace(/^#/, ''));
+        const hashToken = hashParams.get('token') || hashParams.get('access_token') || hashParams.get('sessionToken');
+        if (hashToken) {
+          return { type: 'token', value: hashToken };
+        }
+        const hashCode = hashParams.get('code');
+        if (hashCode) {
+          return { type: 'code', value: hashCode };
+        }
+      }
+    } catch {
+      // Fallback regex if URL constructor fails
+      const codeMatch = trimmed.match(/[?&#](?:code|verification_code)=([^&#\s]+)/i);
+      if (codeMatch) return { type: 'code', value: decodeURIComponent(codeMatch[1]) };
+
+      const tokenMatch = trimmed.match(/[?&#](?:token|sessionToken|access_token)=([^&#\s]+)/i);
+      if (tokenMatch) return { type: 'token', value: decodeURIComponent(tokenMatch[1]) };
+    }
+  }
+
+  // Check if JWT Bearer
+  if (trimmed.startsWith('ey') && trimmed.includes('.')) {
+    return { type: 'bearer', value: trimmed };
+  }
+
+  // Check if 6-digit OTP code
+  if (/^\d{6}$/.test(trimmed)) {
+    return { type: 'code', value: trimmed };
+  }
+
+  // Check if hex token
+  if (/^[0-9a-fA-F]{32,128}$/.test(trimmed)) {
+    return { type: 'token', value: trimmed };
+  }
+
+  return { type: 'raw', value: trimmed };
+}
+
 export function validateAuthInput(
-  mode: 'signin' | 'signup' | 'token' | 'verify',
+  mode: 'signin' | 'signup' | 'token' | 'verify' | 'manual-verify' | 'pool-account',
   fields: {
     email?: string;
     password?: string;
     confirmPassword?: string;
     code?: string;
+    manualToken?: string;
     tokenPoolText?: string;
   }
 ): ValidationResult {
+  if (mode === 'manual-verify') {
+    const raw = (fields.manualToken || fields.code || '').trim();
+    if (!raw) {
+      return {
+        valid: false,
+        error: 'لطفاً توکن احراز هویت، کد تایید یا لینک تغییر مسیر مرورگر را وارد نمایید.',
+      };
+    }
+    const extracted = extractTokenOrCodeFromUrl(raw);
+    if (!extracted.value || extracted.value.length < 4) {
+      return {
+        valid: false,
+        error: 'فرمت توکن یا لینک نامعتبر است. لطفاً توکن نشست، کد ۶ رقمی، یا لینک کامل بازشده در مرورگر را Paste کنید.',
+      };
+    }
+    return { valid: true };
+  }
+
   if (mode === 'verify') {
     const code = (fields.code || '').trim();
     const isSixDigitOtp = /^\d{6}$/.test(code);
@@ -152,7 +231,7 @@ export function validateAuthInput(
     if (!isSixDigitOtp && !isVerificationUrl && !isHexVerifyCode && !isBrowserConfirmed) {
       return {
         valid: false,
-        error: 'Please enter the 6-digit code, paste the confirmation link from your email, or click "I Opened the Email Link".',
+        error: 'کد ۶ رقمی یا لینک تایید ایمیل را وارد کنید، یا از تب تایید دستی با توکن استفاده نمایید.',
       };
     }
     return { valid: true };
@@ -163,7 +242,7 @@ export function validateAuthInput(
     if (tokens.length === 0) {
       return {
         valid: false,
-        error: 'Enter at least one valid hexadecimal FxA sessionToken (32–64 hex characters).',
+        error: 'حداقل یک توکن هگزادسیمال معتبر ۳۲ الی ۶۴ کاراکتری نشست فایرفاکس را وارد کنید.',
       };
     }
     return { valid: true };
@@ -174,21 +253,34 @@ export function validateAuthInput(
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
   if (!emailRegex.test(email)) {
-    return { valid: false, error: 'Please enter a valid Firefox Account email address.' };
+    return { valid: false, error: 'لطفاً یک آدرس ایمیل معتبر فایرفاکس وارد نمایید.' };
   }
 
   if (password.length < 8) {
-    return { valid: false, error: 'Firefox Account password must be at least 8 characters long.' };
+    return { valid: false, error: 'رمز عبور اکانت فایرفاکس باید حداقل ۸ کاراکتر باشد.' };
   }
 
   if (mode === 'signup') {
     if (password !== (fields.confirmPassword || '')) {
-      return { valid: false, error: 'Passwords do not match. Please confirm your password.' };
+      return { valid: false, error: 'رمز عبور و تکرار آن همخوانی ندارند.' };
     }
   }
 
   return { valid: true };
 }
+
+export const AUTO_SERVER: ServerInfo = {
+  id: 'auto',
+  countryName: 'Automatic (Optimal)',
+  countryCode: 'AUTO',
+  cityName: 'Lowest Latency',
+  cityCode: 'AUTO',
+  host: 'muc139.m1.fastly-masque.net',
+  port: 2499,
+  protocol: 'HTTP/2 CONNECT',
+  latencyMs: 24,
+  exitIpPreview: '23.235.42.8',
+};
 
 export function filterAndSortServers(
   servers: ServerInfo[],
@@ -196,7 +288,10 @@ export function filterAndSortServers(
   sortBy: 'latency' | 'country' = 'latency'
 ): ServerInfo[] {
   const q = query.trim().toLowerCase();
-  const filtered = servers.filter((srv) => {
+  const autoServer = servers.find((s) => s.id === 'auto');
+  const otherServers = servers.filter((s) => s.id !== 'auto');
+
+  const filtered = otherServers.filter((srv) => {
     if (!q) return true;
     return (
       srv.countryName.toLowerCase().includes(q) ||
@@ -207,7 +302,7 @@ export function filterAndSortServers(
     );
   });
 
-  return [...filtered].sort((a, b) => {
+  filtered.sort((a, b) => {
     if (sortBy === 'latency') {
       return a.latencyMs - b.latencyMs;
     }
@@ -215,10 +310,17 @@ export function filterAndSortServers(
     if (cmp !== 0) return cmp;
     return a.cityName.localeCompare(b.cityName);
   });
+
+  if (autoServer && (!q || 'automatic بهترین اتوماتیک optimal'.includes(q))) {
+    return [autoServer, ...filtered];
+  }
+  return filtered;
 }
 
 export function countryCodeToFlag(countryCode: string): string {
-  if (!countryCode || countryCode.length !== 2) return '🌐';
+  if (!countryCode) return '🌐';
+  if (countryCode.toUpperCase() === 'AUTO') return '⚡';
+  if (countryCode.length !== 2) return '🌐';
   const upper = countryCode.toUpperCase();
   const c1 = upper.charCodeAt(0);
   const c2 = upper.charCodeAt(1);
