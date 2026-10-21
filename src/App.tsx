@@ -2,18 +2,17 @@ import React, { useEffect, useState } from 'react';
 import {
   Power,
   Globe,
-  Sliders,
   Terminal,
   ArrowUpRight,
   ArrowDownLeft,
   ShieldCheck,
-  ChevronDown,
-  ChevronUp,
   Sun,
   Moon,
   UserCheck,
   RefreshCw,
   Trash2,
+  Copy,
+  Check,
   Languages,
   LogOut,
   Zap,
@@ -111,10 +110,10 @@ export default function App() {
   const [rxRate, setRxRate] = useState(0);
   const [txRate, setTxRate] = useState(0);
   const [speedHistory, setSpeedHistory] = useState<number[]>(
-    Array.from({ length: 24 }, () => 6)
+    Array.from({ length: 28 }, () => 8)
   );
   const [logs, setLogs] = useState<string[]>([]);
-  const [logsExpanded, setLogsExpanded] = useState(true);
+  const [copiedLogs, setCopiedLogs] = useState(false);
 
   // Theme & Language persistence
   const toggleTheme = () => {
@@ -271,6 +270,24 @@ export default function App() {
     setActiveSection('dashboard');
   };
 
+  const handleCopyLogs = async () => {
+    try {
+      await navigator.clipboard.writeText(logs.join('\n'));
+      setCopiedLogs(true);
+      setTimeout(() => setCopiedLogs(false), 2000);
+    } catch {
+      // Fallback
+      const ta = document.createElement('textarea');
+      ta.value = logs.join('\n');
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      setCopiedLogs(true);
+      setTimeout(() => setCopiedLogs(false), 2000);
+    }
+  };
+
   const quota = calculateQuotaSummary(
     status.quotaMaxBytes,
     status.quotaRemainingBytes
@@ -279,7 +296,7 @@ export default function App() {
   return (
     <div
       dir={lang === 'fa' ? 'rtl' : 'ltr'}
-      className={`min-h-screen transition-colors ${
+      className={`h-screen max-h-screen flex flex-col overflow-hidden transition-colors ${
         lang === 'fa' ? 'font-vazirmatn' : 'font-sans'
       } ${
         isDark ? 'bg-[#0B0F17] text-slate-100' : 'bg-[#F8FAFC] text-slate-900'
@@ -287,10 +304,10 @@ export default function App() {
     >
       {/* Top Bar: Brand Wordmark | Navigation Tabs | Actions (Theme, Language, Quick Connect) */}
       <header
-        className={`flex flex-wrap items-center justify-between gap-y-3 gap-x-6 px-6 py-4 border-b ${
+        className={`flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 py-2.5 border-b shrink-0 ${
           isDark
-            ? 'bg-slate-950/80 border-slate-800/80'
-            : 'bg-white border-slate-200 shadow-xs'
+            ? 'bg-slate-950/90 border-slate-800/80'
+            : 'bg-white border-slate-200 shadow-2xs'
         }`}
       >
         <a
@@ -299,15 +316,15 @@ export default function App() {
             e.preventDefault();
             setActiveSection('dashboard');
           }}
-          className="text-base font-bold tracking-tight whitespace-nowrap shrink-0 order-1 flex items-center gap-2"
+          className="text-sm font-bold tracking-tight whitespace-nowrap shrink-0 flex items-center gap-2"
         >
-          <img src="/appicon.png" alt="Logo" className="w-6 h-6 rounded-lg" />
+          <img src="/appicon.png" alt="Logo" className="w-5 h-5 rounded-md" />
           <span>{t.appName}</span>
         </a>
 
         <nav
           aria-label="Primary Workspace Navigation"
-          className="w-full md:w-auto order-3 md:order-2 flex items-center gap-5 sm:gap-6 text-xs sm:text-sm font-semibold overflow-x-auto pb-1 md:pb-0"
+          className="flex items-center gap-4 sm:gap-6 text-xs font-semibold overflow-x-auto py-0.5"
         >
           <button
             type="button"
@@ -366,13 +383,13 @@ export default function App() {
           </button>
         </nav>
 
-        <div className="flex items-center gap-2.5 shrink-0 order-2 md:order-3">
+        <div className="flex items-center gap-2 shrink-0">
           {/* Theme Toggle (Light / Dark) */}
           <button
             type="button"
             aria-label={isDark ? t.lightTheme : t.darkTheme}
             onClick={toggleTheme}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border cursor-pointer transition-colors ${
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-semibold border cursor-pointer transition-colors ${
               isDark
                 ? 'bg-slate-900 border-slate-800 text-slate-200 hover:text-white'
                 : 'bg-slate-50 border-slate-200 text-slate-700 hover:text-slate-900'
@@ -391,7 +408,7 @@ export default function App() {
             type="button"
             aria-label="Switch Language"
             onClick={toggleLanguage}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border cursor-pointer transition-colors ${
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-semibold border cursor-pointer transition-colors ${
               isDark
                 ? 'bg-slate-900 border-slate-800 text-slate-200 hover:text-white'
                 : 'bg-slate-50 border-slate-200 text-slate-700 hover:text-slate-900'
@@ -405,7 +422,7 @@ export default function App() {
           <button
             type="button"
             onClick={handleToggleConnection}
-            className={`px-4 py-2 text-xs font-bold rounded-xl transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-sm ${
+            className={`px-3.5 py-1 rounded-xl text-xs font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-sm ${
               status.state === 'Connected'
                 ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20'
                 : 'bg-orange-500 hover:bg-orange-600 text-white shadow-orange-500/25'
@@ -416,21 +433,21 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Content Area */}
-      <main className="max-w-7xl mx-auto px-6 py-6 space-y-6">
+      {/* Main Content Area: Fits perfectly in single viewport without page-level scrollbar */}
+      <main className="flex-1 p-3.5 sm:p-4 flex flex-col justify-between overflow-hidden gap-3 max-w-7xl mx-auto w-full">
         {/* Contextual Account Status Toolbar */}
         <div
-          className={`flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-2xl border text-xs ${
+          className={`flex flex-wrap items-center justify-between gap-2.5 px-3.5 py-1.5 rounded-xl border text-xs shrink-0 ${
             isDark
               ? 'bg-slate-900/60 border-slate-800/80 text-slate-300'
-              : 'bg-white border-slate-200 text-slate-700 shadow-xs'
+              : 'bg-white border-slate-200 text-slate-700 shadow-2xs'
           }`}
         >
-          <div className="flex items-center gap-2.5">
-            <UserCheck className="w-4 h-4 text-orange-400 shrink-0" />
+          <div className="flex items-center gap-2">
+            <UserCheck className="w-3.5 h-3.5 text-orange-400 shrink-0" />
             {user ? (
               <div className="flex flex-wrap items-center gap-2">
-                <span className="font-bold text-sm">{user.email}</span>
+                <span className="font-bold text-xs">{user.email}</span>
                 <span aria-hidden="true">·</span>
                 <span className={isDark ? 'text-slate-400' : 'text-slate-500'}>
                   {t.planActive}
@@ -463,7 +480,7 @@ export default function App() {
             <button
               type="button"
               onClick={handleSignOut}
-              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold text-rose-400 hover:bg-rose-500/10 cursor-pointer transition-colors"
+              className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg text-xs font-semibold text-rose-400 hover:bg-rose-500/10 cursor-pointer transition-colors"
             >
               <LogOut className="w-3.5 h-3.5" />
               <span>{t.signOut}</span>
@@ -471,67 +488,73 @@ export default function App() {
           )}
         </div>
 
-        {/* View Switcher */}
+        {/* View Switcher: Subviews have internal smooth scrolling if needed */}
         {activeSection === 'auth' && (
-          <AuthView
-            isDark={isDark}
-            lang={lang}
-            onAuthenticated={(authenticatedUser) => {
-              setUser(authenticatedUser);
-              setStatus((prev) => ({
-                ...prev,
-                quotaMaxBytes: authenticatedUser.quotaMaxBytes,
-                quotaRemainingBytes: authenticatedUser.quotaRemainingBytes,
-              }));
-              setActiveSection('dashboard');
-            }}
-          />
+          <div className="flex-1 overflow-y-auto pr-1">
+            <AuthView
+              isDark={isDark}
+              lang={lang}
+              onAuthenticated={(authenticatedUser) => {
+                setUser(authenticatedUser);
+                setStatus((prev) => ({
+                  ...prev,
+                  quotaMaxBytes: authenticatedUser.quotaMaxBytes,
+                  quotaRemainingBytes: authenticatedUser.quotaRemainingBytes,
+                }));
+                setActiveSection('dashboard');
+              }}
+            />
+          </div>
         )}
 
         {activeSection === 'settings' && (
-          <SettingsView
-            settings={settings}
-            isDark={isDark}
-            lang={lang}
-            onSave={async (updated) => {
-              setSettings(updated);
-              await vpnBridge.updateSettings(updated);
-              const s = await vpnBridge.getStatus();
-              setStatus(s);
-              setLogs(await vpnBridge.getLogs());
-            }}
-          />
+          <div className="flex-1 overflow-y-auto pr-1">
+            <SettingsView
+              settings={settings}
+              isDark={isDark}
+              lang={lang}
+              onSave={async (updated) => {
+                setSettings(updated);
+                await vpnBridge.updateSettings(updated);
+                const s = await vpnBridge.getStatus();
+                setStatus(s);
+                setLogs(await vpnBridge.getLogs());
+              }}
+            />
+          </div>
         )}
 
         {activeSection === 'about' && (
-          <AboutView
-            isDark={isDark}
-            lang={lang}
-            onOpenSettings={() => setActiveSection('settings')}
-          />
+          <div className="flex-1 overflow-y-auto pr-1">
+            <AboutView
+              isDark={isDark}
+              lang={lang}
+              onOpenSettings={() => setActiveSection('settings')}
+            />
+          </div>
         )}
 
         {activeSection === 'dashboard' && (
-          <>
+          <div className="flex-1 flex flex-col justify-between gap-3 overflow-hidden">
             {/* Bento Grid Row 1: Primary Connection Switch + Fastly Edge & Mode + 50 GB Quota */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-stretch shrink-0">
               {/* Primary Anchor: Connection Switch Card (5 cols) */}
               <section
                 aria-label="VPN Connection Control"
-                className={`lg:col-span-5 rounded-2xl border p-6 flex flex-col justify-between ${
+                className={`lg:col-span-5 rounded-2xl border p-4 flex flex-col justify-between ${
                   isDark
                     ? 'bg-slate-900/85 border-slate-800'
-                    : 'bg-white border-slate-200 shadow-sm'
+                    : 'bg-white border-slate-200 shadow-2xs'
                 }`}
               >
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="text-xs font-semibold text-slate-400">
+                    <div className="text-[11px] font-semibold text-slate-400">
                       {t.tunnelStatus}
                     </div>
-                    <div className="flex items-center gap-2 mt-0.5">
+                    <div className="flex items-center gap-1.5 mt-0.5">
                       <span
-                        className={`text-lg font-bold tracking-tight ${
+                        className={`text-base font-bold tracking-tight ${
                           status.state === 'Connected'
                             ? 'text-emerald-400'
                             : status.state === 'Connecting...'
@@ -555,31 +578,31 @@ export default function App() {
                   </div>
 
                   <div className="text-end text-xs">
-                    <span className="text-slate-400">{t.adapterMode}</span>
-                    <div className="font-mono font-bold text-orange-400">
+                    <span className="text-slate-400 text-[11px]">{t.adapterMode}</span>
+                    <div className="font-mono font-bold text-orange-400 text-xs">
                       {status.mode === 'tun' ? 'Wintun TUN' : 'WinINET Proxy'}
                     </div>
                   </div>
                 </div>
 
-                {/* Central Power Button */}
-                <div className="my-8 flex flex-col items-center justify-center">
+                {/* Central Power Button: Scaled to fit perfectly */}
+                <div className="my-2.5 flex flex-col items-center justify-center">
                   <button
                     type="button"
                     aria-label={status.state === 'Connected' ? t.disconnectTunnel : t.quickConnect}
                     onClick={handleToggleConnection}
-                    className={`w-36 h-36 rounded-full flex flex-col items-center justify-center gap-2 border-4 transition-all active:scale-95 cursor-pointer ${
+                    className={`w-28 h-28 rounded-full flex flex-col items-center justify-center gap-1.5 border-4 transition-all active:scale-95 cursor-pointer ${
                       status.state === 'Connected'
-                        ? 'bg-emerald-500/15 border-emerald-500 text-emerald-300 shadow-xl shadow-emerald-500/20'
+                        ? 'bg-emerald-500/15 border-emerald-500 text-emerald-300 shadow-lg shadow-emerald-500/20'
                         : status.state === 'Connecting...'
                         ? 'bg-amber-500/15 border-amber-500 text-amber-300 animate-pulse'
                         : isDark
-                        ? 'bg-slate-950 border-slate-700 hover:border-orange-500 text-slate-200 shadow-lg'
-                        : 'bg-slate-100 border-slate-300 hover:border-orange-500 text-slate-800 shadow-md'
+                        ? 'bg-slate-950 border-slate-700 hover:border-orange-500 text-slate-200 shadow-md'
+                        : 'bg-slate-100 border-slate-300 hover:border-orange-500 text-slate-800 shadow-sm'
                     }`}
                   >
-                    <Power className="w-10 h-10" />
-                    <span className="text-xs font-bold tracking-wide">
+                    <Power className="w-8 h-8" />
+                    <span className="text-[11px] font-bold tracking-wide">
                       {status.state === 'Connected'
                         ? t.connected
                         : status.state === 'Connecting...'
@@ -591,13 +614,13 @@ export default function App() {
 
                 {/* Exit Verification Footer */}
                 <div
-                  className={`pt-4 border-t flex items-center justify-between text-xs ${
+                  className={`pt-2.5 border-t flex items-center justify-between text-xs ${
                     isDark ? 'border-slate-800' : 'border-slate-200'
                   }`}
                 >
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5">
                     <ShieldCheck
-                      className={`w-4 h-4 ${
+                      className={`w-3.5 h-3.5 ${
                         status.exitVerified ? 'text-emerald-400' : 'text-slate-500'
                       }`}
                     />
@@ -605,7 +628,7 @@ export default function App() {
                       {t.exitVerifiedNotice}
                     </span>
                   </div>
-                  <span className="font-mono tabular-nums font-bold" dir="ltr">
+                  <span className="font-mono tabular-nums font-bold text-xs" dir="ltr">
                     {status.exitVerified
                       ? `${status.exitIp} (${status.exitCountry})`
                       : t.notTunneled}
@@ -614,23 +637,23 @@ export default function App() {
               </section>
 
               {/* Right 7 Cols: Server Selector & Mode + 50 GB Monthly Allowance */}
-              <div className="lg:col-span-7 flex flex-col justify-between gap-6">
+              <div className="lg:col-span-7 flex flex-col justify-between gap-3">
                 {/* Active Fastly Edge Location & Tunnel Mode Selector */}
                 <section
                   aria-label="Fastly Edge Server and Routing Mode"
-                  className={`rounded-2xl border p-6 space-y-4 ${
+                  className={`rounded-2xl border p-3.5 space-y-2.5 ${
                     isDark
                       ? 'bg-slate-900/85 border-slate-800'
-                      : 'bg-white border-slate-200 shadow-sm'
+                      : 'bg-white border-slate-200 shadow-2xs'
                   }`}
                 >
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div className="flex items-center gap-3.5">
-                      <span className="text-3xl leading-none select-none" aria-hidden="true">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                    <div className="flex items-center gap-3">
+                      <span className="text-2xl leading-none select-none" aria-hidden="true">
                         {countryCodeToFlag(selectedServer.countryCode)}
                       </span>
                       <div>
-                        <div className="text-xs text-slate-400 flex items-center gap-1.5">
+                        <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
                           <span>{lang === 'fa' ? 'نود اتصال Fastly' : 'Fastly Edge Endpoint'}</span>
                           {selectedServer.id === 'auto' && (
                             <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-orange-500/15 text-orange-400 border border-orange-500/30">
@@ -638,12 +661,12 @@ export default function App() {
                             </span>
                           )}
                         </div>
-                        <div className="text-base font-bold tracking-tight">
+                        <div className="text-sm font-bold tracking-tight">
                           {selectedServer.id === 'auto'
                             ? t.autoServerTitle
                             : `${selectedServer.countryName} — ${selectedServer.cityName}`}
                         </div>
-                        <div className="text-xs font-mono text-slate-400" dir="ltr">
+                        <div className="text-[11px] font-mono text-slate-400" dir="ltr">
                           {selectedServer.host}:{selectedServer.port} ·{' '}
                           <span className="text-emerald-400 tabular-nums font-bold">
                             {selectedServer.latencyMs} ms
@@ -655,20 +678,20 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => setShowServerModal(true)}
-                      className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold border transition-colors whitespace-nowrap cursor-pointer ${
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors whitespace-nowrap cursor-pointer ${
                         isDark
                           ? 'bg-slate-950 border-slate-700 hover:border-orange-500 text-slate-100'
                           : 'bg-slate-50 border-slate-300 hover:border-orange-500 text-slate-900'
                       }`}
                     >
-                      <Globe className="w-4 h-4 text-orange-400" />
+                      <Globe className="w-3.5 h-3.5 text-orange-400" />
                       <span>{t.changeLocation}</span>
                     </button>
                   </div>
 
                   {/* Segmented Mode Switcher: Wintun TUN vs System Proxy */}
                   <div
-                    className={`pt-4 border-t flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                    className={`pt-2.5 border-t flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${
                       isDark ? 'border-slate-800' : 'border-slate-200'
                     }`}
                   >
@@ -682,7 +705,7 @@ export default function App() {
                     <div
                       role="group"
                       aria-label="Select Tunnel Routing Mode"
-                      className={`inline-flex p-1 rounded-xl border ${
+                      className={`inline-flex p-0.5 rounded-xl border ${
                         isDark
                           ? 'bg-slate-950 border-slate-800'
                           : 'bg-slate-100 border-slate-200'
@@ -691,7 +714,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => handleModeQuickSwitch('tun')}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors whitespace-nowrap cursor-pointer ${
+                        className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-colors whitespace-nowrap cursor-pointer ${
                           settings.mode === 'tun'
                             ? 'bg-orange-500 text-white'
                             : isDark
@@ -704,7 +727,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => handleModeQuickSwitch('proxy')}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors whitespace-nowrap cursor-pointer ${
+                        className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-colors whitespace-nowrap cursor-pointer ${
                           settings.mode === 'proxy'
                             ? 'bg-orange-500 text-white'
                             : isDark
@@ -721,23 +744,23 @@ export default function App() {
                 {/* 50 GB Monthly Allowance Progress Card */}
                 <section
                   aria-label="Monthly Quota Card"
-                  className={`rounded-2xl border p-6 space-y-4 ${
+                  className={`rounded-2xl border p-3.5 space-y-2.5 ${
                     isDark
                       ? 'bg-slate-900/85 border-slate-800'
-                      : 'bg-white border-slate-200 shadow-sm'
+                      : 'bg-white border-slate-200 shadow-2xs'
                   }`}
                 >
                   <div className="flex items-center justify-between">
                     <div>
-                      <h2 className="text-sm font-bold tracking-tight">
+                      <h2 className="text-xs font-bold tracking-tight">
                         {t.monthlyAllowanceTitle}
                       </h2>
-                      <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                      <p className={`text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
                         {t.monthlyAllowanceSubtitle}
                       </p>
                     </div>
                     <span
-                      className={`px-2.5 py-1 rounded-full text-xs font-bold border ${
+                      className={`px-2 py-0.5 rounded-full text-[11px] font-bold border ${
                         quota.healthState === 'nominal'
                           ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
                           : quota.healthState === 'warning'
@@ -749,9 +772,9 @@ export default function App() {
                     </span>
                   </div>
 
-                  <div className="space-y-1.5">
+                  <div className="space-y-1">
                     <div
-                      className={`h-3 rounded-full overflow-hidden p-0.5 border ${
+                      className={`h-2.5 rounded-full overflow-hidden p-0.5 border ${
                         isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-200'
                       }`}
                     >
@@ -766,7 +789,7 @@ export default function App() {
                         style={{ width: `${Math.min(100, quota.usedPercent)}%` }}
                       />
                     </div>
-                    <div className="flex items-center justify-between text-xs font-mono text-slate-400" dir="ltr">
+                    <div className="flex items-center justify-between text-[11px] font-mono text-slate-400" dir="ltr">
                       <span>{t.usedThisCycle} {quota.usedGB} GB ({quota.usedPercent}%)</span>
                       <span className="font-bold text-slate-200">{quota.remainingPercent}% Available</span>
                     </div>
@@ -776,41 +799,41 @@ export default function App() {
             </div>
 
             {/* Bento Grid Row 2: Live Network Telemetry & Diagnostics Log */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-stretch flex-1 min-h-0">
               {/* Left 6 cols: Live Throughput Graph */}
               <section
                 aria-label="Throughput Monitoring"
-                className={`lg:col-span-6 rounded-2xl border p-6 flex flex-col justify-between space-y-4 ${
+                className={`lg:col-span-6 rounded-2xl border p-3 flex flex-col justify-between space-y-2 ${
                   isDark
                     ? 'bg-slate-900/85 border-slate-800'
-                    : 'bg-white border-slate-200 shadow-sm'
+                    : 'bg-white border-slate-200 shadow-2xs'
                 }`}
               >
                 <div className="flex items-center justify-between">
                   <div>
-                    <h2 className="text-sm font-bold tracking-tight">
+                    <h2 className="text-xs font-bold tracking-tight">
                       {t.realtimeThroughput}
                     </h2>
-                    <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                    <p className={`text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
                       {t.pingRtt} <span className="font-mono font-bold text-emerald-400">{status.pingMs} ms</span>
                     </p>
                   </div>
 
-                  <div className="flex items-center gap-3 text-xs font-mono" dir="ltr">
-                    <div className="flex items-center gap-1.5 text-emerald-400">
-                      <ArrowDownLeft className="w-4 h-4" />
+                  <div className="flex items-center gap-2 text-[11px] font-mono" dir="ltr">
+                    <div className="flex items-center gap-1 text-emerald-400">
+                      <ArrowDownLeft className="w-3.5 h-3.5" />
                       <span className="font-bold">{formatRate(rxRate)}</span>
                     </div>
-                    <div className="flex items-center gap-1.5 text-purple-400">
-                      <ArrowUpRight className="w-4 h-4" />
+                    <div className="flex items-center gap-1 text-purple-400">
+                      <ArrowUpRight className="w-3.5 h-3.5" />
                       <span className="font-bold">{formatRate(txRate)}</span>
                     </div>
                   </div>
                 </div>
 
-                {/* Sparkline Canvas */}
+                {/* Sparkline Canvas: Compact height to fit in viewport */}
                 <div
-                  className={`h-28 rounded-xl border p-2 flex items-end gap-1.5 overflow-hidden ${
+                  className={`h-16 rounded-xl border p-1.5 flex items-end gap-1 overflow-hidden ${
                     isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-50 border-slate-200'
                   }`}
                   dir="ltr"
@@ -818,36 +841,62 @@ export default function App() {
                   {speedHistory.map((val, i) => (
                     <div
                       key={i}
-                      className="flex-1 rounded-sm bg-gradient-to-t from-orange-500/30 to-orange-400 transition-all duration-300"
+                      className="flex-1 rounded-xs bg-gradient-to-t from-orange-500/30 to-orange-400 transition-all duration-300"
                       style={{ height: `${val}%` }}
                     />
                   ))}
                 </div>
 
-                <div className="flex items-center justify-between text-xs font-mono text-slate-400" dir="ltr">
+                <div className="flex items-center justify-between text-[11px] font-mono text-slate-400" dir="ltr">
                   <span>{t.sessionRx} {formatBytes(status.downloadedBytes)}</span>
                   <span>{t.sessionTx} {formatBytes(status.uploadedBytes)}</span>
                 </div>
               </section>
 
-              {/* Right 6 cols: Control-Plane Diagnostics Console */}
+              {/* Right 6 cols: Control-Plane Diagnostics Console with COPY button */}
               <section
                 aria-label="Diagnostic Logs"
-                className={`lg:col-span-6 rounded-2xl border p-6 flex flex-col justify-between space-y-3 ${
+                className={`lg:col-span-6 rounded-2xl border p-3 flex flex-col justify-between space-y-1.5 min-h-0 ${
                   isDark
                     ? 'bg-slate-900/85 border-slate-800'
-                    : 'bg-white border-slate-200 shadow-sm'
+                    : 'bg-white border-slate-200 shadow-2xs'
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Terminal className="w-4 h-4 text-orange-400" />
-                    <h2 className="text-sm font-bold tracking-tight">
+                  <div className="flex items-center gap-1.5">
+                    <Terminal className="w-3.5 h-3.5 text-orange-400" />
+                    <h2 className="text-xs font-bold tracking-tight">
                       {t.logsTitle}
                     </h2>
                   </div>
 
                   <div className="flex items-center gap-1.5">
+                    {/* Copy Logs Button */}
+                    <button
+                      type="button"
+                      onClick={handleCopyLogs}
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer ${
+                        copiedLogs
+                          ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-400'
+                          : isDark
+                          ? 'bg-slate-950 border-slate-800 text-slate-300 hover:text-white'
+                          : 'bg-slate-50 border-slate-200 text-slate-700 hover:text-slate-900'
+                      }`}
+                      title={t.copyLogs}
+                    >
+                      {copiedLogs ? (
+                        <>
+                          <Check className="w-3 h-3 text-emerald-400" />
+                          <span>{t.logsCopied}</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3 h-3 text-orange-400" />
+                          <span>{t.copyLogs}</span>
+                        </>
+                      )}
+                    </button>
+
                     <button
                       type="button"
                       onClick={async () => {
@@ -857,7 +906,7 @@ export default function App() {
                       className="p-1 rounded-lg text-slate-400 hover:text-slate-100 cursor-pointer"
                       title={t.refresh}
                     >
-                      <RefreshCw className="w-3.5 h-3.5" />
+                      <RefreshCw className="w-3 h-3" />
                     </button>
                     <button
                       type="button"
@@ -865,14 +914,14 @@ export default function App() {
                       className="p-1 rounded-lg text-slate-400 hover:text-rose-400 cursor-pointer"
                       title={t.clear}
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
+                      <Trash2 className="w-3 h-3" />
                     </button>
                   </div>
                 </div>
 
-                {/* Console Log Terminal */}
+                {/* Console Log Terminal with Internal Scroll */}
                 <div
-                  className={`h-40 rounded-xl p-3 font-mono text-[11px] overflow-y-auto space-y-1 border ${
+                  className={`h-20 sm:h-24 rounded-xl p-2 font-mono text-[10px] overflow-y-auto space-y-0.5 border ${
                     isDark
                       ? 'bg-slate-950 border-slate-800 text-slate-300'
                       : 'bg-slate-950 border-slate-800 text-slate-200'
@@ -899,12 +948,12 @@ export default function App() {
                   )}
                 </div>
 
-                <div className="text-end text-[11px] font-mono text-slate-400">
+                <div className="text-end text-[10px] font-mono text-slate-400">
                   Wintun v0.14.1 · HTTP/2 Multiplexed Tunnel
                 </div>
               </section>
             </div>
-          </>
+          </div>
         )}
       </main>
 

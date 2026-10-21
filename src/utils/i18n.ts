@@ -39,6 +39,8 @@ export interface Translations {
   realtimeThroughput: string;
   pingRtt: string;
   logsTitle: string;
+  copyLogs: string;
+  logsCopied: string;
   refresh: string;
   clear: string;
   exitVerifiedNotice: string;
@@ -167,11 +169,11 @@ export interface Translations {
 export const translations: Record<Language, Translations> = {
   fa: {
     appName: 'FoxyVPN Windows',
-    version: '1.0.3',
+    version: '1.0.4',
     dashboard: 'داشبورد',
     auth: 'اکانت و ورود',
     settings: 'تنظیمات تونل',
-    about: 'درباره برنامه (v1.0.3)',
+    about: 'درباره برنامه (v1.0.4)',
     quickConnect: 'اتصال سریع',
     disconnectTunnel: 'قطع اتصال تونل',
     connected: 'متصل شد',
@@ -204,6 +206,8 @@ export const translations: Record<Language, Translations> = {
     realtimeThroughput: 'ترافیک زنده استریم HTTP/2',
     pingRtt: 'پینگ زنده:',
     logsTitle: 'کنسول لاگ‌های تشخیصی و کنترل Wintun',
+    copyLogs: 'کپی لاگ‌ها',
+    logsCopied: 'کپی شد!',
     refresh: 'تازه‌سازی',
     clear: 'پاک‌سازی',
     exitVerifiedNotice: 'آی‌پی تاییدشده با Cloudflare:',
@@ -324,11 +328,11 @@ export const translations: Record<Language, Translations> = {
   },
   en: {
     appName: 'FoxyVPN Windows',
-    version: '1.0.3',
+    version: '1.0.4',
     dashboard: 'Dashboard',
     auth: 'Sign In / Account',
     settings: 'Tunnel Settings',
-    about: 'About (v1.0.3)',
+    about: 'About (v1.0.4)',
     quickConnect: 'Quick Connect',
     disconnectTunnel: 'Disconnect Tunnel',
     connected: 'Connected',
@@ -361,6 +365,8 @@ export const translations: Record<Language, Translations> = {
     realtimeThroughput: 'Real-Time HTTP/2 Stream Throughput',
     pingRtt: 'Live Ping:',
     logsTitle: 'Wintun & Guardian Diagnostics Control-Plane Logs',
+    copyLogs: 'Copy Logs',
+    logsCopied: 'Copied!',
     refresh: 'Refresh',
     clear: 'Clear',
     exitVerifiedNotice: 'Exit IP verified via Cloudflare:',

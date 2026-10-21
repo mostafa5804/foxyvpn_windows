@@ -56,7 +56,7 @@ export const AboutView: React.FC<AboutViewProps> = ({ isDark, lang }) => {
 
           <div className="flex flex-wrap items-center justify-center sm:justify-start gap-3 pt-2">
             <a
-              href="https://github.com/vauth/foxyvpn"
+              href="https://github.com/mostafa5804/foxyvpn_windows"
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold transition-colors border border-slate-700 cursor-pointer shadow-sm"
@@ -67,7 +67,7 @@ export const AboutView: React.FC<AboutViewProps> = ({ isDark, lang }) => {
             </a>
 
             <a
-              href="https://github.com/vauth/foxyvpn/releases"
+              href="https://github.com/mostafa5804/foxyvpn_windows/releases"
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-semibold transition-colors cursor-pointer shadow-sm shadow-orange-500/25"

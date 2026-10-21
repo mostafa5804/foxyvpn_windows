@@ -171,7 +171,7 @@ function nowTimeStr(): string {
 
 class WailsRuntimeBridge {
   private logs: string[] = [
-    `${nowTimeStr()} [INFO ] FoxyVPN Windows Client v1.0.3 initialized (Wails v2 + Go 1.23)`,
+    `${nowTimeStr()} [INFO ] FoxyVPN Windows Client v1.0.4 initialized (Wails v2 + Go 1.23)`,
     `${nowTimeStr()} [INFO ] Loaded Mozilla Remote Settings topology (Fastly HTTP/2 CONNECT edge regions on port 2499)`,
     `${nowTimeStr()} [INFO ] Wintun v0.14.1 driver (amd64) verified in application directory`,
   ];
