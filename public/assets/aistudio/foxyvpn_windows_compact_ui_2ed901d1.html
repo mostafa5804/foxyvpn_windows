@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FoxyVPN Windows - Compact Edition</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Vazirmatn Font -->
+    <link href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css" rel="stylesheet" type="text/css" />
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Vazirmatn', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            font-family: 'Vazirmatn', sans-serif;
+        }
+        /* Custom scrollbar for compact look */
+        ::-webkit-scrollbar {
+            width: 4px;
+            height: 4px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(156, 163, 175, 0.5);
+            border-radius: 9999px;
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 flex items-center justify-center min-h-screen p-2 md:p-4 select-none">
+
+    <!-- Window Container with Compact Aspect Ratio -->
+    <div id="app-window" class="w-full max-w-[420px] h-[780px] bg-slate-950/90 backdrop-blur-xl border border-slate-800/80 rounded-2xl shadow-2xl flex flex-col overflow-hidden transition-all duration-300">
+        
+        <!-- Header & Top Bar -->
+        <header class="px-4 py-3 bg-slate-900/80 border-b border-slate-800 flex items-center justify-between shrink-0">
+            <div class="flex items-center gap-2">
+                <div class="w-7 h-7 bg-gradient-to-tr from-orange-600 to-amber-500 rounded-lg flex items-center justify-center shadow-md shadow-orange-500/20">
+                    <i class="fa-solid fa-shield-cat text-white text-xs"></i>
+                </div>
+                <span class="font-bold text-sm tracking-wide bg-gradient-to-r from-orange-400 to-amber-200 bg-clip-text text-transparent">FoxyVPN</span>
+            </div>
+
+            <!-- Quick Controls -->
+            <div class="flex items-center gap-1.5">
+                <button onclick="toggleTheme()" class="w-7 h-7 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 flex items-center justify-center text-xs transition" title="تم تاریک/روشن">
+                    <i id="theme-icon" class="fa-solid fa-moon"></i>
+                </button>
+                <button class="w-7 h-7 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 flex items-center justify-center text-[10px] font-semibold transition">
+                    EN
+                </button>
+            </div>
+        </header>
+
+        <!-- Navigation Tabs -->
+        <nav class="grid grid-cols-4 gap-1 p-1.5 bg-slate-900/50 border-b border-slate-800 text-xs shrink-0">
+            <button onclick="switchTab('dashboard')" id="tab-dashboard" class="py-2 rounded-lg font-medium transition flex flex-col items-center gap-1 text-orange-400 bg-orange-500/10 border border-orange-500/20">
+                <i class="fa-solid fa-chart-pie text-sm"></i>
+                <span>داشبورد</span>
+            </button>
+            <button onclick="switchTab('account')" id="tab-account" class="py-2 rounded-lg font-medium transition flex flex-col items-center gap-1 text-slate-400 hover:text-slate-200 hover:bg-slate-800/50">
+                <i class="fa-solid fa-user-shield text-sm"></i>
+                <span>حساب</span>
+            </button>
+            <button onclick="switchTab('settings')" id="tab-settings" class="py-2 rounded-lg font-medium transition flex flex-col items-center gap-1 text-slate-400 hover:text-slate-200 hover:bg-slate-800/50">
+                <i class="fa-solid fa-sliders text-sm"></i>
+                <span>تنظیمات</span>
+            </button>
+            <button onclick="switchTab('about')" id="tab-about" class="py-2 rounded-lg font-medium transition flex flex-col items-center gap-1 text-slate-400 hover:text-slate-200 hover:bg-slate-800/50">
+                <i class="fa-solid fa-circle-info text-sm"></i>
+                <span>درباره</span>
+            </button>
+        </nav>
+
+        <!-- Main Content Scrollable Area -->
+        <main class="flex-1 overflow-y-auto p-3.5 space-y-3">
+
+            <!-- PAGE 1: DASHBOARD -->
+            <div id="page-dashboard" class="space-y-3">
+                <!-- User Status Banner -->
+                <div class="bg-slate-900/90 border border-slate-800/80 rounded-xl p-3 flex items-center justify-between text-xs">
+                    <div class="truncate pl-2">
+                        <span class="text-slate-400">کاربر:</span>
+                        <span class="font-mono text-orange-300">xyfesu@rover.info</span>
+                    </div>
+                    <button class="text-red-400 hover:text-red-300 flex items-center gap-1 transition shrink-0">
+                        <i class="fa-solid fa-arrow-right-from-bracket"></i> خروج
+                    </button>
+                </div>
+
+                <!-- Connection Big Card -->
+                <div class="bg-gradient-to-b from-slate-900 to-slate-900/60 border border-slate-800 rounded-2xl p-4 flex flex-col items-center relative overflow-hidden">
+                    <div class="absolute -top-10 -right-10 w-32 h-32 bg-emerald-500/10 rounded-full blur-2xl"></div>
+                    
+                    <!-- Connect Button Circle -->
+                    <div class="relative my-3">
+                        <div class="absolute inset-0 rounded-full bg-emerald-500/20 animate-ping"></div>
+                        <button onclick="toggleConnection()" id="connect-btn" class="w-24 h-24 rounded-full bg-gradient-to-tr from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 shadow-lg shadow-emerald-600/30 flex flex-col items-center justify-center text-white transition transform active:scale-95 cursor-pointer relative z-10">
+                            <i id="connect-icon" class="fa-solid fa-power-off text-2xl mb-1"></i>
+                            <span id="connect-text" class="text-xs font-bold">متصل شد</span>
+                        </button>
+                    </div>
+
+                    <div class="text-center mt-1">
+                        <div class="text-xs text-slate-400">زمان اتصال: <span id="timer" class="font-mono text-slate-200">01:26:46</span></div>
+                        <div class="text-[11px] text-emerald-400 mt-0.5 flex items-center justify-center gap-1">
+                            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                            سرور: فینلاند (Fastly - 100ms)
+                        </div>
+                    </div>
+
+                    <!-- Action Toggle -->
+                    <div class="w-full grid grid-cols-2 gap-2 mt-4 pt-3 border-t border-slate-800/80">
+                        <button class="bg-slate-800/80 hover:bg-slate-700 text-[11px] py-2 rounded-lg font-medium text-slate-300 flex items-center justify-center gap-1.5 transition">
+                            <i class="fa-solid fa-location-dot text-orange-400"></i> تغییر لوکیشن
+                        </button>
+                        <button class="bg-orange-500/10 border border-orange-500/20 text-orange-300 text-[11px] py-2 rounded-lg font-medium flex items-center justify-center gap-1.5 transition">
+                            <i class="fa-solid fa-bolt"></i> Wintun Full
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Traffic & Data Usage -->
+                <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3 space-y-2 text-xs">
+                    <div class="flex justify-between text-slate-400 text-[11px]">
+                        <span>سهمیه ترافیک ماهانه موزیلا</span>
+                        <span class="text-emerald-400 font-medium">49.49 GB از 50 GB</span>
+                    </div>
+                    <div class="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+                        <div class="bg-gradient-to-r from-orange-500 to-emerald-500 h-full w-[99%] rounded-full"></div>
+                    </div>
+                    <div class="flex justify-between text-[10px] text-slate-500">
+                        <span>مصرف این ماه: 0.51 GB</span>
+                        <span>99% Available</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PAGE 2: ACCOUNT -->
+            <div id="page-account" class="space-y-3 hidden">
+                <div class="bg-gradient-to-br from-slate-900 to-slate-900/60 border border-slate-800 rounded-xl p-4 text-center space-y-3">
+                    <div class="w-12 h-12 bg-orange-500/10 border border-orange-500/20 rounded-2xl mx-auto flex items-center justify-center text-orange-400 text-lg shadow-inner">
+                        <i class="fa-solid fa-shield-halved"></i>
+                    </div>
+                    <div>
+                        <h3 class="font-bold text-sm">ورود به حساب فایرفاکس</h3>
+                        <p class="text-[11px] text-slate-400 mt-1">سهمیه ۵۰ گیگابایت ترافیک ماهانه رایگان با اکانت فایرفاکس</p>
+                    </div>
+
+                    <div class="space-y-2 text-right">
+                        <div>
+                            <label class="text-[10px] text-slate-400 mb-1 block">ایمیل اکانت فایرفاکس (Firefox Account Email)</label>
+                            <div class="relative">
+                                <span class="absolute right-3 top-2.5 text-slate-500 text-xs"><i class="fa-solid fa-envelope"></i></span>
+                                <input type="email" placeholder="you@example.com" class="w-full bg-slate-950 border border-slate-800 rounded-lg pr-9 pl-3 py-2 text-xs focus:outline-none focus:border-orange-500 transition">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="text-[10px] text-slate-400 mb-1 block">رمز عبور (Password)</label>
+                            <div class="relative">
+                                <span class="absolute right-3 top-2.5 text-slate-500 text-xs"><i class="fa-solid fa-lock"></i></span>
+                                <input type="password" placeholder="حداقل ۸ کاراکتر" class="w-full bg-slate-950 border border-slate-800 rounded-lg pr-9 pl-3 py-2 text-xs focus:outline-none focus:border-orange-500 transition">
+                            </div>
+                        </div>
+                    </div>
+
+                    <button class="w-full bg-gradient-to-r from-orange-600 to-amber-500 hover:from-orange-500 hover:to-amber-400 text-white font-medium py-2.5 rounded-lg text-xs shadow-lg shadow-orange-600/20 transition">
+                        ورود به اکانت فایرفاکس <i class="fa-solid fa-arrow-left mr-1"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- PAGE 3: SETTINGS -->
+            <div id="page-settings" class="space-y-3 hidden">
+                <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3.5 space-y-3 text-xs">
+                    <h3 class="font-bold text-orange-400 flex items-center gap-1.5 border-b border-slate-800 pb-2">
+                        <i class="fa-solid fa-network-wired"></i> تنظیمات پیشرفته هسته تونل
+                    </h3>
+
+                    <!-- Option Group 1 -->
+                    <div class="space-y-1.5">
+                        <label class="text-[11px] text-slate-300 font-medium">حالت هدایت ترافیک در ویندوز</label>
+                        <select class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-orange-500">
+                            <option>کارت شبکه کامل سیستم (Wintun TUN)</option>
+                            <option>پراکسی محلی ویندوز (SOCKS5 / WinINET)</option>
+                        </select>
+                    </div>
+
+                    <!-- Option Group 2 -->
+                    <div class="space-y-1.5">
+                        <label class="text-[11px] text-slate-300 font-medium">سرور امن DNS over HTTPS</label>
+                        <select class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-orange-500">
+                            <option>Cloudflare (1.1.1.1 / 1.0.0.1)</option>
+                            <option>Google (8.8.8.8)</option>
+                        </select>
+                    </div>
+
+                    <!-- Switch/Toggle Option -->
+                    <div class="flex items-center justify-between pt-2 border-t border-slate-800">
+                        <div>
+                            <div class="font-medium text-slate-200">سوئیچ قطع اضطراری اینترنت (Kill Switch)</div>
+                            <div class="text-[10px] text-slate-500">مسدودسازی اینترنت در صورت قطع ناگهانی تونل</div>
+                        </div>
+                        <input type="checkbox" checked class="w-4 h-4 accent-orange-500 rounded cursor-pointer">
+                    </div>
+
+                    <button class="w-full bg-orange-600/20 border border-orange-500/30 hover:bg-orange-600/30 text-orange-300 font-medium py-2 rounded-lg text-xs transition mt-2">
+                        ذخیره و اعمال تنظیمات
+                    </button>
+                </div>
+            </div>
+
+            <!-- PAGE 4: ABOUT -->
+            <div id="page-about" class="space-y-3 hidden">
+                <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-4 text-center space-y-3">
+                    <div class="w-16 h-16 bg-gradient-to-tr from-orange-600 to-amber-500 rounded-2xl mx-auto flex items-center justify-center shadow-lg shadow-orange-500/30">
+                        <i class="fa-solid fa-shield-cat text-white text-3xl"></i>
+                    </div>
+                    <div>
+                        <div class="flex items-center justify-center gap-1.5">
+                            <h3 class="font-bold text-sm">FoxyVPN Windows</h3>
+                            <span class="bg-orange-500/20 text-orange-400 text-[10px] font-mono px-1.5 py-0.5 rounded">v1.0.4</span>
+                        </div>
+                        <p class="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                            کلاینت بومی، پرتابل و متن‌باز برای استفاده از سهمیه ۵۰ گیگابایت ترافیک ماهانه رایگان موزیلا.
+                        </p>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-2 text-right pt-2 border-t border-slate-800 text-[11px]">
+                        <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                            <span class="text-slate-500 block text-[10px]">فریمورک هسته:</span>
+                            <span class="font-mono text-slate-300">Wails v2.9 + Go 1.23</span>
+                        </div>
+                        <div class="bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                            <span class="text-slate-500 block text-[10px]">درایور شبکه:</span>
+                            <span class="font-mono text-slate-300">Wintun v0.14.1</span>
+                        </div>
+                    </div>
+
+                    <a href="https://github.com" target="_blank" class="block w-full bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium py-2 rounded-lg text-xs transition text-center">
+                        <i class="fa-brands fa-github ml-1"></i> مخزن گیت‌هاب (GitHub)
+                    </a>
+                </div>
+            </div>
+
+        </main>
+
+        <!-- Footer Status Bar -->
+        <footer class="px-3 py-2 bg-slate-900 border-t border-slate-800 text-[10px] text-slate-500 flex items-center justify-between shrink-0">
+            <span>Wintun TUN Active</span>
+            <span class="text-emerald-500 flex items-center gap-1">
+                <i class="fa-solid fa-circle text-[8px]"></i> آماده اتصال
+            </span>
+        </footer>
+    </div>
+
+    <script>
+        // Tab Switching Logic
+        function switchTab(tabName) {
+            const tabs = ['dashboard', 'account', 'settings', 'about'];
+            tabs.forEach(t => {
+                const pageEl = document.getElementById(`page-${t}`);
+                const tabEl = document.getElementById(`tab-${t}`);
+                if (t === tabName) {
+                    pageEl.classList.remove('hidden');
+                    tabEl.className = "py-2 rounded-lg font-medium transition flex flex-col items-center gap-1 text-orange-400 bg-orange-500/10 border border-orange-500/20";
+                } else {
+                    pageEl.classList.add('hidden');
+                    tabEl.className = "py-2 rounded-lg font-medium transition flex flex-col items-center gap-1 text-slate-400 hover:text-slate-200 hover:bg-slate-800/50";
+                }
+            });
+        }
+
+        // Connection Toggle Simulation
+        let isConnected = true;
+        function toggleConnection() {
+            isConnected = !isConnected;
+            const btn = document.getElementById('connect-btn');
+            const icon = document.getElementById('connect-icon');
+            const text = document.getElementById('connect-text');
+            
+            if (isConnected) {
+                btn.className = "w-24 h-24 rounded-full bg-gradient-to-tr from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 shadow-lg shadow-emerald-600/30 flex flex-col items-center justify-center text-white transition transform active:scale-95 cursor-pointer relative z-10";
+                icon.className = "fa-solid fa-power-off text-2xl mb-1";
+                text.innerText = "متصل شد";
+            } else {
+                btn.className = "w-24 h-24 rounded-full bg-gradient-to-tr from-slate-700 to-slate-800 hover:from-slate-600 hover:to-slate-700 shadow-lg shadow-slate-900/50 flex flex-col items-center justify-center text-slate-300 transition transform active:scale-95 cursor-pointer relative z-10";
+                icon.className = "fa-solid fa-power-off text-2xl mb-1 text-slate-400";
+                text.innerText = "قطع شده";
+            }
+        }
+
+        // Theme Toggle
+        let isDark = true;
+        function toggleTheme() {
+            isDark = !isDark;
+            const win = document.getElementById('app-window');
+            const themeIcon = document.getElementById('theme-icon');
+            if (isDark) {
+                win.className = "w-full max-w-[420px] h-[780px] bg-slate-950/90 backdrop-blur-xl border border-slate-800/80 rounded-2xl shadow-2xl flex flex-col overflow-hidden transition-all duration-300 text-slate-100";
+                themeIcon.className = "fa-solid fa-moon";
+            } else {
+                win.className = "w-full max-w-[420px] h-[780px] bg-slate-50/95 backdrop-blur-xl border border-slate-200 rounded-2xl shadow-2xl flex flex-col overflow-hidden transition-all duration-300 text-slate-800";
+                themeIcon.className = "fa-solid fa-sun text-amber-500";
+            }
+        }
+    </script>
+</body>
+</html>

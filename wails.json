@@ -1,0 +1,21 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "FoxyVPN",
+  "outputfilename": "FoxyVPN",
+  "frontend:dir": ".",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "FoxyVPN Contributors",
+    "email": "opensource@foxyvpn.dev"
+  },
+  "info": {
+    "companyName": "FoxyVPN Open Source",
+    "productName": "FoxyVPN Windows Client",
+    "productVersion": "1.2.0",
+    "copyright": "MIT License",
+    "comments": "Unofficial Mozilla Firefox VPN Windows Desktop Client (HTTP/2 CONNECT + Wintun)"
+  }
+}
