@@ -133,10 +133,12 @@ export default function App() {
   ]);
   const [copiedLogs, setCopiedLogs] = useState(false);
 
-  // Auth Form State (for Account Tab: Login, Register, Pool)
-  const [authFormTab, setAuthFormTab] = useState<'signin' | 'signup' | 'pool'>('signin');
+  // Auth Form State (for Account Tab: Sign In & Account Pool)
+  const [authFormTab, setAuthFormTab] = useState<'signin' | 'pool'>('signin');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
+  const [needsOtpCode, setNeedsOtpCode] = useState(false);
+  const [otpCode, setOtpCode] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authSuccess, setAuthSuccess] = useState<string | null>(null);
@@ -378,57 +380,53 @@ export default function App() {
     setAccountList(vpnBridge.getAccountPool());
   };
 
-  // Quick account generation helper (for fast testing / allowance adding)
-  const handleQuickAddAccount = async (target: 'pool' | 'direct') => {
-    setAuthLoading(true);
-    setAuthError(null);
-    setAuthSuccess(null);
-    try {
-      const randomId = Math.random().toString(36).substring(2, 8);
-      const quickEmail = `foxy.${randomId}@rover.info`;
-      const quickPass = `Pass!${randomId}#9`;
-      let newUser: UserInfo;
-      if (target === 'pool') {
-        newUser = await vpnBridge.addAccountToPool(quickEmail, quickPass);
-        const poolCountNow = vpnBridge.getAccountPool().length;
-        setAuthSuccess(
-          lang === 'fa'
-            ? `اکانت ۵۰ گیگابایت خودکار (${quickEmail}) به استخر اضافه شد! سهمیه کل: ${poolCountNow * 50} گیگابایت`
-            : `Auto 50 GB account (${quickEmail}) added to pool! Total quota: ${poolCountNow * 50} GB`
-        );
-      } else {
-        newUser = await vpnBridge.registerAccount(quickEmail, quickPass);
-        setAuthSuccess(
-          lang === 'fa'
-            ? `اکانت ۵۰ گیگابایت (${quickEmail}) ساخته و فعال شد!`
-            : `Account (${quickEmail}) registered with 50 GB!`
-        );
-      }
-      setUser(newUser);
-      setAccountList(vpnBridge.getAccountPool());
-      setStatus((prev) => ({
-        ...prev,
-        quotaMaxBytes: newUser.quotaMaxBytes,
-        quotaRemainingBytes: newUser.quotaRemainingBytes,
-      }));
-    } catch (err: unknown) {
-      setAuthError(err instanceof Error ? err.message : 'Error generating account');
-    } finally {
-      setAuthLoading(false);
-    }
-  };
-
-  // Auth Form Submit (Supports Login, Register, Pool)
+  // Auth Form Submit (Supports Real Sign-In, 6-Digit Email OTP Verification, and Multi-Account Pool)
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
     setAuthSuccess(null);
 
+    if (needsOtpCode) {
+      if (!otpCode.trim() || otpCode.trim().length < 6) {
+        setAuthError(
+          lang === 'fa'
+            ? 'لطفاً کد تایید ۶ رقمی ارسال‌شده به ایمیل را وارد کنید'
+            : 'Please enter the 6-digit verification code sent to your email'
+        );
+        return;
+      }
+      setAuthLoading(true);
+      try {
+        const verifiedUser = await vpnBridge.verifyEmailCode(otpCode.trim());
+        setUser(verifiedUser);
+        setAccountList(vpnBridge.getAccountPool());
+        setStatus((prev) => ({
+          ...prev,
+          quotaMaxBytes: verifiedUser.quotaMaxBytes,
+          quotaRemainingBytes: verifiedUser.quotaRemainingBytes,
+        }));
+        setNeedsOtpCode(false);
+        setOtpCode('');
+        setAuthEmail('');
+        setAuthPassword('');
+        setAuthSuccess(
+          lang === 'fa'
+            ? 'کد تایید شد و اکانت شما به صورت خودکار ذخیره گردید'
+            : 'Code verified and account saved automatically'
+        );
+      } catch (err: unknown) {
+        setAuthError(err instanceof Error ? err.message : 'Verification failed');
+      } finally {
+        setAuthLoading(false);
+      }
+      return;
+    }
+
     if (!authEmail.trim() || !authPassword.trim()) {
       setAuthError(
         lang === 'fa'
-          ? 'لطفاً نام کاربری / ایمیل و رمز عبور را وارد کنید'
-          : 'Please enter username/email and password'
+          ? 'لطفاً ایمیل اکانت فایرفاکس و رمز عبور را وارد کنید'
+          : 'Please enter your Firefox Account email and password'
       );
       return;
     }
@@ -438,23 +436,34 @@ export default function App() {
       let loggedUser: UserInfo;
       if (authFormTab === 'pool') {
         loggedUser = await vpnBridge.addAccountToPool(authEmail.trim(), authPassword);
+        if (loggedUser.requiresVerification) {
+          setNeedsOtpCode(true);
+          setAuthSuccess(
+            lang === 'fa'
+              ? `کد تایید ۶ رقمی موزیلا به ${authEmail.trim()} ارسال شد. کد را وارد کنید:`
+              : `Mozilla sent a 6-digit verification code to ${authEmail.trim()}. Enter it below:`
+          );
+          return;
+        }
         const count = vpnBridge.getAccountPool().length;
         setAuthSuccess(
           lang === 'fa'
-            ? `اکانت جدید به استخر اضافه شد (+۵۰ گیگابایت). سهمیه تجمیعی استخر: ${count * 50} گیگابایت!`
-            : `Account added to pool (+50 GB). Total combined quota: ${count * 50} GB!`
-        );
-      } else if (authFormTab === 'signup') {
-        loggedUser = await vpnBridge.registerAccount(authEmail.trim(), authPassword);
-        setAuthSuccess(
-          lang === 'fa'
-            ? 'ثبت‌نام انجام شد و اکانت با ۵۰ گیگابایت سهمیه فعال گردید'
-            : 'Signed up successfully with 50 GB allowance'
+            ? `اکانت جدید به استخر اضافه و ذخیره شد (+۵۰ گیگابایت). سهمیه کل: ${count * 50} گیگابایت`
+            : `Account added to pool and saved (+50 GB). Total quota: ${count * 50} GB`
         );
       } else {
         loggedUser = await vpnBridge.login(authEmail.trim(), authPassword);
+        if (loggedUser.requiresVerification) {
+          setNeedsOtpCode(true);
+          setAuthSuccess(
+            lang === 'fa'
+              ? `کد تایید ۶ رقمی موزیلا به ${authEmail.trim()} ارسال شد. کد را وارد کنید:`
+              : `Mozilla sent a 6-digit verification code to ${authEmail.trim()}. Enter it below:`
+          );
+          return;
+        }
         setAuthSuccess(
-          lang === 'fa' ? 'ورود با موفقیت انجام شد' : 'Signed in successfully'
+          lang === 'fa' ? 'ورود با موفقیت انجام شد و اکانت ذخیره گردید' : 'Signed in and saved automatically'
         );
       }
       setUser(loggedUser);
@@ -467,7 +476,17 @@ export default function App() {
       setAuthEmail('');
       setAuthPassword('');
     } catch (err: unknown) {
-      setAuthError(err instanceof Error ? err.message : 'Authentication failed');
+      const msg = err instanceof Error ? err.message : 'Authentication failed';
+      if (msg.toLowerCase().includes('verification code')) {
+        setNeedsOtpCode(true);
+        setAuthSuccess(
+          lang === 'fa'
+            ? 'موزیلا کد تایید ۶ رقمی به ایمیل شما ارسال کرد. لطفاً کد را وارد کنید:'
+            : 'Mozilla sent a 6-digit verification code to your email. Please enter it below:'
+        );
+      } else {
+        setAuthError(msg);
+      }
     } finally {
       setAuthLoading(false);
     }
@@ -1084,8 +1103,14 @@ export default function App() {
                   >
                     {activeEmail}
                   </span>
-                  <span className="text-[11.5px] text-[#2DD4A0] font-medium">
-                    {lang === 'fa' ? 'سهمیه ۵۰ گیگ فعال' : '50 GB Quota Active'}
+                  <span className="text-[11px] text-[#2DD4A0] font-medium">
+                    {user || accountList.length > 0
+                      ? lang === 'fa'
+                        ? 'ذخیره خودکار فعال (data/account.bin)'
+                        : 'Auto-saved (data/account.bin)'
+                      : lang === 'fa'
+                      ? 'با اکانت فایرفاکس وارد شوید'
+                      : 'Sign in with your Firefox Account'}
                   </span>
                 </span>
 
@@ -1095,71 +1120,23 @@ export default function App() {
                     onClick={handleSignOut}
                     aria-label={t.signOut}
                     title={t.signOut}
-                    className="w-11 h-11 rounded-[10px] border border-[#2A323D] bg-transparent text-[#F08A8A] hover:bg-red-950/30 flex items-center justify-center shrink-0 p-0 cursor-pointer transition-colors"
+                    className="w-10 h-10 rounded-[10px] border border-[#2A323D] bg-transparent text-[#F08A8A] hover:bg-red-950/30 flex items-center justify-center shrink-0 p-0 cursor-pointer transition-colors"
                   >
                     <LogOut className="w-4 h-4" />
                   </button>
                 )}
               </div>
 
-              {/* Automatic Binary Account Storage Card (data/account.bin) */}
-              <div
-                className={`p-3 rounded-[12px] border flex flex-col gap-2 ${
-                  isDark ? 'bg-[#10261F]/40 border-[#2DD4A0]/30' : 'bg-emerald-50/70 border-emerald-200'
-                }`}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="flex items-center gap-1.5 font-bold text-[12px] text-[#2DD4A0]">
-                    <ShieldCheck className="w-4 h-4 shrink-0" />
-                    <span>{t.sessionBackupTitle}</span>
-                  </span>
-                  <span dir="ltr" className="font-mono text-[10.5px] font-bold px-2 py-0.5 rounded bg-[#2DD4A0]/15 text-[#2DD4A0]">
-                    data/account.bin
-                  </span>
-                </div>
-                <p className={`text-[11px] leading-relaxed m-0 ${isDark ? 'text-[#A5AFBB]' : 'text-slate-600'}`}>
-                  {t.sessionBackupDesc}
-                </p>
-                <div className="grid grid-cols-2 gap-2 pt-0.5">
-                  <button
-                    type="button"
-                    onClick={handleExportAccountBin}
-                    className={`h-[34px] rounded-[8px] border text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
-                      isDark
-                        ? 'border-[#2DD4A0]/40 bg-[#10261F] text-[#2DD4A0] hover:bg-[#10261F]/80'
-                        : 'border-emerald-300 bg-white text-emerald-700 hover:bg-emerald-50'
-                    }`}
-                  >
-                    <span>{t.exportSessionBtn}</span>
-                  </button>
-                  <label
-                    className={`h-[34px] rounded-[8px] border text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
-                      isDark
-                        ? 'border-[#2A323D] bg-[#0E1116] text-[#C5CDD6] hover:text-white'
-                        : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
-                    }`}
-                  >
-                    <span>{t.importSessionBtn}</span>
-                    <input
-                      type="file"
-                      accept=".bin,application/octet-stream"
-                      onChange={handleImportAccountBin}
-                      className="hidden"
-                    />
-                  </label>
-                </div>
-              </div>
-
-              {/* Login / Register / Pool Form Card */}
+              {/* Login / Pool Form Card (Real Mozilla FxA Authentication Only) */}
               <form
                 onSubmit={handleAuthSubmit}
-                className={`p-3.5 rounded-[12px] border flex flex-col gap-3 ${
+                className={`p-3 rounded-[12px] border flex flex-col gap-2.5 ${
                   isDark ? 'bg-[#151A21] border-[#232A33]' : 'bg-[#FFFFFF] border-[#E2E8F0] shadow-2xs'
                 }`}
               >
-                {/* 3 Form Tabs */}
+                {/* 2 Form Tabs: Sign In & Account Pool */}
                 <div
-                  className={`grid grid-cols-3 gap-1 p-[3px] rounded-[11px] border ${
+                  className={`grid grid-cols-2 gap-1 p-[3px] rounded-[10px] border ${
                     isDark ? 'bg-[#0E1116] border-[#232A33]' : 'bg-[#F1F5F9] border-[#E2E8F0]'
                   }`}
                 >
@@ -1167,10 +1144,11 @@ export default function App() {
                     type="button"
                     onClick={() => {
                       setAuthFormTab('signin');
+                      setNeedsOtpCode(false);
                       setAuthError(null);
                       setAuthSuccess(null);
                     }}
-                    className={`h-[36px] border-0 rounded-[8px] text-[12px] font-bold cursor-pointer transition-colors ${
+                    className={`h-[34px] border-0 rounded-[7px] text-[12px] font-bold cursor-pointer transition-colors ${
                       authFormTab === 'signin'
                         ? 'bg-[#FF7A1A] text-[#1A0F05]'
                         : isDark
@@ -1178,35 +1156,18 @@ export default function App() {
                         : 'bg-transparent text-[#64748B] hover:text-black'
                     }`}
                   >
-                    {lang === 'fa' ? 'ورود' : 'Login'}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAuthFormTab('signup');
-                      setAuthError(null);
-                      setAuthSuccess(null);
-                    }}
-                    className={`h-[36px] border-0 rounded-[8px] text-[12px] font-bold cursor-pointer transition-colors ${
-                      authFormTab === 'signup'
-                        ? 'bg-[#FF7A1A] text-[#1A0F05]'
-                        : isDark
-                        ? 'bg-transparent text-[#A5AFBB] hover:text-white'
-                        : 'bg-transparent text-[#64748B] hover:text-black'
-                    }`}
-                  >
-                    {lang === 'fa' ? 'ثبت‌نام' : 'Register'}
+                    {lang === 'fa' ? 'ورود به حساب' : 'Sign In'}
                   </button>
 
                   <button
                     type="button"
                     onClick={() => {
                       setAuthFormTab('pool');
+                      setNeedsOtpCode(false);
                       setAuthError(null);
                       setAuthSuccess(null);
                     }}
-                    className={`h-[36px] border-0 rounded-[8px] text-[12px] font-bold cursor-pointer transition-colors ${
+                    className={`h-[34px] border-0 rounded-[7px] text-[12px] font-bold cursor-pointer transition-colors ${
                       authFormTab === 'pool'
                         ? 'bg-[#FF7A1A] text-[#1A0F05]'
                         : isDark
@@ -1214,49 +1175,104 @@ export default function App() {
                         : 'bg-transparent text-[#64748B] hover:text-black'
                     }`}
                   >
-                    {lang === 'fa' ? 'استخر اکانت' : 'Account Pool'}
+                    {lang === 'fa' ? 'افزودن به استخر (+۵۰ گیگ)' : 'Add to Pool (+50 GB)'}
                   </button>
                 </div>
 
                 {authSuccess && (
-                  <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-[#2DD4A0] text-[11.5px] font-medium leading-relaxed">
+                  <div className="p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-[#2DD4A0] text-[11.5px] font-medium leading-relaxed">
                     {authSuccess}
                   </div>
                 )}
 
                 {authError && (
-                  <div className="p-2.5 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-[11.5px] font-medium leading-relaxed">
+                  <div className="p-2 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-[11.5px] font-medium leading-relaxed">
                     {authError}
                   </div>
                 )}
 
-                {/* TAB 1: SIGN IN */}
-                {authFormTab === 'signin' && (
+                {needsOtpCode ? (
                   <>
                     <div className="flex flex-col gap-1.5">
-                      <label htmlFor="auth-email-input" className="text-[12px] font-semibold text-[#C5CDD6]">
-                        {lang === 'fa' ? 'ایمیل یا نام کاربری فایرفاکس' : 'Firefox Account Email'}
+                      <label htmlFor="auth-otp-input" className="text-[12px] font-semibold text-[#C5CDD6]">
+                        {lang === 'fa' ? 'کد تایید ۶ رقمی ایمیل موزیلا' : '6-Digit Mozilla Email Code'}
+                      </label>
+                      <input
+                        id="auth-otp-input"
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={6}
+                        dir="ltr"
+                        value={otpCode}
+                        onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
+                        placeholder="123456"
+                        className={`w-full box-border h-[42px] rounded-[10px] font-mono text-center tracking-[0.35em] text-[15px] font-bold px-3.5 border transition-colors outline-none focus:border-[#FF7A1A] ${
+                          isDark
+                            ? 'bg-[#0E1116] border-[#2A323D] text-[#E8ECF1]'
+                            : 'bg-slate-50 border-slate-300 text-slate-900'
+                        }`}
+                      />
+                    </div>
+                    <div className="grid grid-cols-[1fr_auto] gap-2">
+                      <button
+                        type="submit"
+                        disabled={authLoading}
+                        className="h-[40px] border-0 rounded-[10px] bg-[#FF7A1A] hover:bg-[#FFA04D] text-[#1A0F05] font-bold text-[13px] flex items-center justify-center gap-2 cursor-pointer transition-colors shadow-md disabled:opacity-50"
+                      >
+                        {authLoading
+                          ? lang === 'fa'
+                            ? 'در حال تایید کد...'
+                            : 'Verifying...'
+                          : lang === 'fa'
+                          ? 'تایید کد ۶ رقمی و فعال‌سازی'
+                          : 'Verify 6-Digit Code'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setNeedsOtpCode(false);
+                          setOtpCode('');
+                        }}
+                        className={`h-[40px] px-3 rounded-[10px] border text-[12px] font-semibold cursor-pointer ${
+                          isDark ? 'border-[#2A323D] bg-[#0E1116] text-[#A5AFBB]' : 'border-slate-300 bg-white text-slate-700'
+                        }`}
+                      >
+                        {lang === 'fa' ? 'بازگشت' : 'Back'}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex flex-col gap-1">
+                      <label htmlFor="auth-email-input" className="text-[11.5px] font-semibold text-[#C5CDD6]">
+                        {authFormTab === 'pool'
+                          ? lang === 'fa'
+                            ? 'ایمیل اکانت فایرفاکس جدید برای استخر'
+                            : 'Additional Firefox Account Email'
+                          : lang === 'fa'
+                          ? 'ایمیل اکانت فایرفاکس'
+                          : 'Firefox Account Email'}
                       </label>
                       <div className="relative">
                         <input
                           id="auth-email-input"
-                          type="text"
+                          type="email"
                           dir="ltr"
                           value={authEmail}
                           onChange={(e) => setAuthEmail(e.target.value)}
                           placeholder="you@example.com"
-                          className={`w-full box-border h-[44px] rounded-[10px] text-[13px] pl-3.5 pr-10 border transition-colors outline-none focus:border-[#FF7A1A] ${
+                          className={`w-full box-border h-[40px] rounded-[10px] text-[13px] pl-3.5 pr-10 border transition-colors outline-none focus:border-[#FF7A1A] ${
                             isDark
                               ? 'bg-[#0E1116] border-[#2A323D] text-[#E8ECF1]'
                               : 'bg-slate-50 border-slate-300 text-slate-900'
                           }`}
                         />
-                        <Mail className="absolute right-3.5 top-3 w-[18px] h-[18px] text-[#7C8793] pointer-events-none" />
+                        <Mail className="absolute right-3.5 top-2.5 w-[17px] h-[17px] text-[#7C8793] pointer-events-none" />
                       </div>
                     </div>
 
-                    <div className="flex flex-col gap-1.5">
-                      <label htmlFor="auth-pass-input" className="text-[12px] font-semibold text-[#C5CDD6]">
+                    <div className="flex flex-col gap-1">
+                      <label htmlFor="auth-pass-input" className="text-[11.5px] font-semibold text-[#C5CDD6]">
                         {lang === 'fa' ? 'رمز عبور' : 'Password'}
                       </label>
                       <div className="relative">
@@ -1267,220 +1283,78 @@ export default function App() {
                           value={authPassword}
                           onChange={(e) => setAuthPassword(e.target.value)}
                           placeholder="••••••••"
-                          className={`w-full box-border h-[44px] rounded-[10px] text-[13px] pl-3.5 pr-10 border transition-colors outline-none focus:border-[#FF7A1A] ${
+                          className={`w-full box-border h-[40px] rounded-[10px] text-[13px] pl-3.5 pr-10 border transition-colors outline-none focus:border-[#FF7A1A] ${
                             isDark
                               ? 'bg-[#0E1116] border-[#2A323D] text-[#E8ECF1]'
                               : 'bg-slate-50 border-slate-300 text-slate-900'
                           }`}
                         />
-                        <Lock className="absolute right-3.5 top-3 w-[18px] h-[18px] text-[#7C8793] pointer-events-none" />
+                        <Lock className="absolute right-3.5 top-2.5 w-[17px] h-[17px] text-[#7C8793] pointer-events-none" />
                       </div>
                     </div>
 
                     <button
                       type="submit"
                       disabled={authLoading}
-                      className="h-[44px] border-0 rounded-[10px] bg-[#FF7A1A] hover:bg-[#FFA04D] text-[#1A0F05] font-bold text-[13.5px] flex items-center justify-center gap-2 cursor-pointer transition-colors shadow-md disabled:opacity-50"
+                      className="h-[40px] border-0 rounded-[10px] bg-[#FF7A1A] hover:bg-[#FFA04D] text-[#1A0F05] font-bold text-[13px] flex items-center justify-center gap-2 cursor-pointer transition-colors shadow-md disabled:opacity-50"
                     >
-                      {authLoading ? (lang === 'fa' ? 'در حال ورود...' : 'Signing in...') : (lang === 'fa' ? 'ورود به حساب' : 'Sign In')}
-                      <ArrowNext className="w-4 h-4" />
+                      {authFormTab === 'pool' ? (
+                        <>
+                          <Plus className="w-4 h-4" />
+                          <span>
+                            {authLoading
+                              ? lang === 'fa'
+                                ? 'در حال احراز هویت...'
+                                : 'Authenticating...'
+                              : lang === 'fa'
+                              ? 'افزودن اکانت به استخر (+۵۰ گیگ)'
+                              : 'Add Account to Pool (+50 GB)'}
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <span>
+                            {authLoading
+                              ? lang === 'fa'
+                                ? 'در حال ورود...'
+                                : 'Signing in...'
+                              : lang === 'fa'
+                              ? 'ورود به حساب'
+                              : 'Sign In'}
+                          </span>
+                          <ArrowNext className="w-4 h-4" />
+                        </>
+                      )}
                     </button>
 
+                    {/* Official Mozilla Website Registration Link */}
                     <button
                       type="button"
-                      disabled={authLoading}
-                      onClick={() => handleQuickAddAccount('direct')}
-                      className={`h-[36px] rounded-[8px] border text-[11.5px] font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
-                        isDark ? 'border-[#2A323D] text-[#A5AFBB] hover:text-white hover:bg-slate-800/30' : 'border-slate-300 text-slate-700 hover:bg-slate-100'
+                      onClick={() =>
+                        openExternalUrl(
+                          'https://accounts.firefox.com/signup?service=5882386c6d801776&context=fx_desktop_v3'
+                        )
+                      }
+                      className={`h-[34px] rounded-[8px] border text-[11px] font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                        isDark
+                          ? 'border-[#2A323D] bg-[#0E1116] text-[#A5AFBB] hover:text-[#FF7A1A] hover:border-[#FF7A1A]/50'
+                          : 'border-slate-200 bg-slate-50 text-slate-600 hover:text-[#EA580C] hover:border-orange-300'
                       }`}
                     >
-                      <Zap className="w-3.5 h-3.5 text-amber-400" />
-                      <span>{lang === 'fa' ? 'ورود فوری با اکانت تست ۵۰ گیگ' : 'Instant Login with 50 GB Demo'}</span>
-                    </button>
-                  </>
-                )}
-
-                {/* TAB 2: REGISTER */}
-                {authFormTab === 'signup' && (
-                  <>
-                    {/* Open in default browser button */}
-                    <div
-                      className={`p-3 rounded-[10px] border flex flex-col gap-2 ${
-                        isDark ? 'bg-[#0E1116] border-[#2A323D]' : 'bg-slate-50 border-slate-200'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-[12px] text-[#FF7A1A]">
-                          {lang === 'fa' ? 'ثبت‌نام در مرورگر موزیلا' : 'Mozilla Official Signup'}
-                        </span>
-                        <span className="text-[10px] bg-emerald-500/15 text-[#2DD4A0] font-bold px-2 py-0.5 rounded-full">
-                          50 GB Free
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-[#8B96A3] leading-relaxed m-0">
+                      <ExternalLink className="w-3.5 h-3.5 text-[#FF7A1A] shrink-0" />
+                      <span>
                         {lang === 'fa'
-                          ? 'لینک صفحه رسمی ثبت‌نام اکانت فایرفاکس را در مرورگر پیش‌فرض ویندوز باز کنید و پس از ثبت اکانت، مشخصات را در برنامه وارد نمایید.'
-                          : 'Open the official Firefox registration page in your default browser, create an account, then enter credentials here.'}
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => openExternalUrl('https://accounts.firefox.com/signup?service=5882386c6d801776&context=fx_desktop_v3')}
-                        className="h-[36px] rounded-[8px] bg-[#FF7A1A]/15 hover:bg-[#FF7A1A]/25 border border-[#FF7A1A]/40 text-[#FF7A1A] font-bold text-[12px] flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
-                      >
-                        <ExternalLink className="w-3.5 h-3.5" />
-                        <span>{lang === 'fa' ? 'باز کردن لینک ثبت‌نام در مرورگر ویندوز' : 'Open Registration in Browser'}</span>
-                      </button>
-                    </div>
-
-                    <div className="flex flex-col gap-1.5">
-                      <label htmlFor="auth-email-input" className="text-[12px] font-semibold text-[#C5CDD6]">
-                        {lang === 'fa' ? 'ایمیل اکانت جدید' : 'New Account Email'}
-                      </label>
-                      <div className="relative">
-                        <input
-                          id="auth-email-input"
-                          type="email"
-                          dir="ltr"
-                          value={authEmail}
-                          onChange={(e) => setAuthEmail(e.target.value)}
-                          placeholder="you@example.com"
-                          className={`w-full box-border h-[44px] rounded-[10px] text-[13px] pl-3.5 pr-10 border transition-colors outline-none focus:border-[#FF7A1A] ${
-                            isDark
-                              ? 'bg-[#0E1116] border-[#2A323D] text-[#E8ECF1]'
-                              : 'bg-slate-50 border-slate-300 text-slate-900'
-                          }`}
-                        />
-                        <Mail className="absolute right-3.5 top-3 w-[18px] h-[18px] text-[#7C8793] pointer-events-none" />
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col gap-1.5">
-                      <label htmlFor="auth-pass-input" className="text-[12px] font-semibold text-[#C5CDD6]">
-                        {lang === 'fa' ? 'رمز عبور دلخواه' : 'Desired Password'}
-                      </label>
-                      <div className="relative">
-                        <input
-                          id="auth-pass-input"
-                          type="password"
-                          dir="ltr"
-                          value={authPassword}
-                          onChange={(e) => setAuthPassword(e.target.value)}
-                          placeholder={lang === 'fa' ? 'حداقل ۸ کاراکتر' : 'At least 8 chars'}
-                          className={`w-full box-border h-[44px] rounded-[10px] text-[13px] pl-3.5 pr-10 border transition-colors outline-none focus:border-[#FF7A1A] ${
-                            isDark
-                              ? 'bg-[#0E1116] border-[#2A323D] text-[#E8ECF1]'
-                              : 'bg-slate-50 border-slate-300 text-slate-900'
-                          }`}
-                        />
-                        <Lock className="absolute right-3.5 top-3 w-[18px] h-[18px] text-[#7C8793] pointer-events-none" />
-                      </div>
-                    </div>
-
-                    <button
-                      type="submit"
-                      disabled={authLoading}
-                      className="h-[44px] border-0 rounded-[10px] bg-[#FF7A1A] hover:bg-[#FFA04D] text-[#1A0F05] font-bold text-[13.5px] flex items-center justify-center gap-2 cursor-pointer transition-colors shadow-md disabled:opacity-50"
-                    >
-                      {authLoading ? (lang === 'fa' ? 'در حال ثبت‌نام...' : 'Registering...') : (lang === 'fa' ? 'ثبت‌نام مستقیم و فعال‌سازی ۵۰ گیگ' : 'Register and Activate 50 GB')}
-                      <ArrowNext className="w-4 h-4" />
-                    </button>
-                  </>
-                )}
-
-                {/* TAB 3: POOL (Add Multiple Accounts) */}
-                {authFormTab === 'pool' && (
-                  <>
-                    <div
-                      className={`p-3 rounded-[10px] border flex flex-col gap-1.5 ${
-                        isDark ? 'bg-[#1C160F] border-[#6B3A12]' : 'bg-amber-50 border-amber-200'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-[12.5px] text-[#FF9A4D]">
-                          {lang === 'fa' ? 'سهمیه کل استخر اکانت‌ها' : 'Combined Pool Capacity'}
-                        </span>
-                        <span className="font-mono font-bold text-[13px] text-[#2DD4A0]">
-                          {totalPoolQuotaGB} GB
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-[#8B96A3] leading-relaxed m-0">
-                        {lang === 'fa'
-                          ? `هر اکانتی که با ایمیل و رمز اضافه کنید ۵۰ گیگابایت به سهمیه کلی شما می‌افزاید (${poolCount} اکانت ثبت شده).`
-                          : `Each account added adds +50 GB to your combined quota (${poolCount} accounts registered).`}
-                      </p>
-                    </div>
-
-                    <div className="flex flex-col gap-1.5">
-                      <label htmlFor="auth-email-input" className="text-[12px] font-semibold text-[#C5CDD6]">
-                        {lang === 'fa' ? 'ایمیل / نام کاربری اکانت اضافه' : 'Account Email / Username'}
-                      </label>
-                      <div className="relative">
-                        <input
-                          id="auth-email-input"
-                          type="text"
-                          dir="ltr"
-                          value={authEmail}
-                          onChange={(e) => setAuthEmail(e.target.value)}
-                          placeholder="account2@example.com"
-                          className={`w-full box-border h-[44px] rounded-[10px] text-[13px] pl-3.5 pr-10 border transition-colors outline-none focus:border-[#FF7A1A] ${
-                            isDark
-                              ? 'bg-[#0E1116] border-[#2A323D] text-[#E8ECF1]'
-                              : 'bg-slate-50 border-slate-300 text-slate-900'
-                          }`}
-                        />
-                        <Mail className="absolute right-3.5 top-3 w-[18px] h-[18px] text-[#7C8793] pointer-events-none" />
-                      </div>
-                    </div>
-
-                    <div className="flex flex-col gap-1.5">
-                      <label htmlFor="auth-pass-input" className="text-[12px] font-semibold text-[#C5CDD6]">
-                        {lang === 'fa' ? 'رمز عبور اکانت' : 'Account Password'}
-                      </label>
-                      <div className="relative">
-                        <input
-                          id="auth-pass-input"
-                          type="password"
-                          dir="ltr"
-                          value={authPassword}
-                          onChange={(e) => setAuthPassword(e.target.value)}
-                          placeholder="••••••••"
-                          className={`w-full box-border h-[44px] rounded-[10px] text-[13px] pl-3.5 pr-10 border transition-colors outline-none focus:border-[#FF7A1A] ${
-                            isDark
-                              ? 'bg-[#0E1116] border-[#2A323D] text-[#E8ECF1]'
-                              : 'bg-slate-50 border-slate-300 text-slate-900'
-                          }`}
-                        />
-                        <Lock className="absolute right-3.5 top-3 w-[18px] h-[18px] text-[#7C8793] pointer-events-none" />
-                      </div>
-                    </div>
-
-                    <button
-                      type="submit"
-                      disabled={authLoading}
-                      className="h-[44px] border-0 rounded-[10px] bg-[#FF7A1A] hover:bg-[#FFA04D] text-[#1A0F05] font-bold text-[13.5px] flex items-center justify-center gap-2 cursor-pointer transition-colors shadow-md disabled:opacity-50"
-                    >
-                      <Plus className="w-4 h-4" />
-                      <span>{authLoading ? (lang === 'fa' ? 'در حال افزودن...' : 'Adding...') : (lang === 'fa' ? 'افزودن اکانت به استخر (+۵۰ گیگ)' : 'Add Account to Pool (+50 GB)')}</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      disabled={authLoading}
-                      onClick={() => handleQuickAddAccount('pool')}
-                      className={`h-[36px] rounded-[8px] border text-[11.5px] font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
-                        isDark ? 'border-[#2A323D] text-[#A5AFBB] hover:text-white hover:bg-slate-800/30' : 'border-slate-300 text-slate-700 hover:bg-slate-100'
-                      }`}
-                    >
-                      <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                      <span>{lang === 'fa' ? 'افزودن خودکار ۵۰ گیگابایت به استخر' : 'Quick Generate +50 GB to Pool'}</span>
+                          ? 'اکانت ندارید؟ ثبت‌نام در سایت رسمی موزیلا (سپس اینجا وارد شوید)'
+                          : 'No account? Register on Mozilla website, then sign in here'}
+                      </span>
                     </button>
                   </>
                 )}
               </form>
 
-              {/* Multi-Account Pool Card */}
+              {/* Multi-Account Pool Card (Immediately visible without scrolling) */}
               <div
-                className={`flex-1 min-h-[140px] p-[12px_14px_14px] rounded-[12px] border flex flex-col gap-2 ${
+                className={`flex-1 min-h-[150px] p-3 rounded-[12px] border flex flex-col gap-2 ${
                   isDark ? 'bg-[#151A21] border-[#232A33]' : 'bg-[#FFFFFF] border-[#E2E8F0] shadow-2xs'
                 }`}
               >
@@ -1498,13 +1372,13 @@ export default function App() {
                     </div>
                   ) : (
                     accountList.map((acc, index) => {
-                      const isActive = user?.email === acc.email;
+                      const isActive = user?.email === acc.email || user?.email?.startsWith(acc.email);
                       return (
                         <div key={acc.email || index}>
                           <div
                             onClick={() => handleSelectPoolAccount(acc)}
-                            className={`flex items-center gap-2.5 h-[44px] px-1 rounded-lg cursor-pointer transition-colors ${
-                              isActive ? 'bg-[#FF7A1A]/10' : 'hover:bg-slate-500/10'
+                            className={`flex items-center gap-2.5 h-[40px] px-2 rounded-lg cursor-pointer transition-colors ${
+                              isActive ? 'bg-[#FF7A1A]/15 border border-[#FF7A1A]/30' : 'hover:bg-slate-500/10'
                             }`}
                           >
                             <span
@@ -1520,7 +1394,7 @@ export default function App() {
                             </span>
                             <span
                               dir="ltr"
-                              className="font-mono text-[11px] text-[#8B96A3] shrink-0"
+                              className="font-mono text-[11px] text-[#2DD4A0] font-semibold shrink-0"
                             >
                               {acc.quotaGB || 50} GB
                             </span>
@@ -1531,32 +1405,19 @@ export default function App() {
                                 handleDeletePoolAccount(acc.email);
                               }}
                               aria-label="Delete"
-                              className="w-8 h-8 border-0 bg-transparent text-[#8B96A3] hover:text-red-400 flex items-center justify-center p-0 cursor-pointer"
+                              className="w-7 h-7 border-0 bg-transparent text-[#8B96A3] hover:text-red-400 flex items-center justify-center p-0 cursor-pointer"
                             >
-                              <Trash2 className="w-4 h-4" />
+                              <Trash2 className="w-3.5 h-3.5" />
                             </button>
                           </div>
                           {index < accountList.length - 1 && (
-                            <div className="h-[1px] bg-[#232A33]"></div>
+                            <div className="h-[1px] bg-[#232A33]/50 my-0.5"></div>
                           )}
                         </div>
                       );
                     })
                   )}
                 </div>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAuthFormTab('pool');
-                    const em = document.getElementById('auth-email-input');
-                    if (em) em.focus();
-                  }}
-                  className="h-[44px] border border-dashed border-[#3A4452] hover:border-[#FF7A1A] rounded-[10px] bg-transparent text-[#C5CDD6] hover:text-[#FF7A1A] font-semibold text-[12.5px] flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>{lang === 'fa' ? 'افزودن اکانت به استخر' : 'Add Account to Pool'}</span>
-                </button>
               </div>
             </>
           )}
