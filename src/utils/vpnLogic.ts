@@ -327,3 +327,75 @@ export function countryCodeToFlag(countryCode: string): string {
   if (c1 < 65 || c1 > 90 || c2 < 65 || c2 > 90) return '🌐';
   return String.fromCodePoint(0x1f1e6 + (c1 - 65), 0x1f1e6 + (c2 - 65));
 }
+
+export const ACCOUNT_BIN_PATH = 'data/account.bin';
+export const ACCOUNT_BIN_MAGIC = 'FOXYBIN1';
+export const APP_VERSION = '1.0.5';
+
+export interface AccountBinarySnapshot {
+  version: string;
+  magic: string;
+  savedAt: number;
+  user: UserInfo | null;
+  pool: Array<{
+    id: string;
+    email: string;
+    token: string;
+    quotaGB: number;
+    active: boolean;
+    addedAt: string;
+  }>;
+  settings?: ClientSettings;
+}
+
+const BIN_OBFUSCATION_KEY = [0x46, 0x4f, 0x58, 0x59, 0x56, 0x50, 0x4e, 0x35, 0xa5, 0x5a, 0xc3, 0x3c];
+
+/**
+ * Encodes an AccountBinarySnapshot into the binary `data/account.bin` format
+ * starting with the 8-byte ASCII magic header `FOXYBIN1`.
+ */
+export function encodeAccountBinPayload(snapshot: AccountBinarySnapshot): Uint8Array {
+  const jsonStr = JSON.stringify({
+    ...snapshot,
+    version: APP_VERSION,
+    magic: ACCOUNT_BIN_MAGIC,
+  });
+  const encoder = new TextEncoder();
+  const magicBytes = encoder.encode(ACCOUNT_BIN_MAGIC);
+  const payloadBytes = encoder.encode(jsonStr);
+  const out = new Uint8Array(magicBytes.length + payloadBytes.length);
+  out.set(magicBytes, 0);
+  for (let i = 0; i < payloadBytes.length; i++) {
+    out[magicBytes.length + i] = payloadBytes[i] ^ BIN_OBFUSCATION_KEY[i % BIN_OBFUSCATION_KEY.length];
+  }
+  return out;
+}
+
+/**
+ * Decodes a binary `data/account.bin` byte array back into an AccountBinarySnapshot.
+ */
+export function decodeAccountBinPayload(bytes: Uint8Array): AccountBinarySnapshot | null {
+  if (!bytes || bytes.length <= 8) return null;
+  const decoder = new TextDecoder();
+  const magic = decoder.decode(bytes.slice(0, 8));
+  if (magic !== ACCOUNT_BIN_MAGIC) {
+    try {
+      const legacy = JSON.parse(decoder.decode(bytes));
+      if (legacy && typeof legacy === 'object') return legacy as AccountBinarySnapshot;
+    } catch {
+      return null;
+    }
+    return null;
+  }
+  const body = new Uint8Array(bytes.length - 8);
+  for (let i = 0; i < body.length; i++) {
+    body[i] = bytes[8 + i] ^ BIN_OBFUSCATION_KEY[i % BIN_OBFUSCATION_KEY.length];
+  }
+  try {
+    const parsed = JSON.parse(decoder.decode(body));
+    return parsed as AccountBinarySnapshot;
+  } catch {
+    return null;
+  }
+}
+

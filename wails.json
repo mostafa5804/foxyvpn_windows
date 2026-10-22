@@ -14,7 +14,7 @@
   "info": {
     "companyName": "FoxyVPN Open Source",
     "productName": "FoxyVPN Windows Client",
-    "productVersion": "1.2.0",
+    "productVersion": "1.0.5",
     "copyright": "MIT License",
     "comments": "Unofficial Mozilla Firefox VPN Windows Desktop Client (HTTP/2 CONNECT + Wintun)"
   }

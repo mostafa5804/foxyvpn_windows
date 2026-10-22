@@ -101,15 +101,21 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	_ = vpn.EnsureWintunDriver()
-	a.appendLog("INFO", "FoxyVPN Windows Client started (Wintun + HTTP/2 CONNECT + DoH Engine ready)")
+	a.appendLog("INFO", "FoxyVPN Windows Client v1.0.5 started (Wintun + HTTP/2 CONNECT + DoH Engine ready)")
 
-	if saved, err := a.authSvc.LoadTokens(); err == nil && saved.AccessToken != "" {
-		a.appendLog("INFO", fmt.Sprintf("Restored saved Firefox Account session for %s", saved.Email))
+	if saved, err := a.authSvc.LoadTokens(); err == nil && (saved.AccessToken != "" || saved.SessionToken != "") {
+		a.appendLog("INFO", fmt.Sprintf("Restored encrypted account session from data/account.bin for %s", saved.Email))
 		ent, err := a.authSvc.EnsureGuardianEntitlement(ctx, saved.AccessToken)
-		quotaMax := auth.DefaultMonthlyAllowance
-		quotaRem := auth.DefaultMonthlyAllowance
-		if err == nil && ent != nil {
+		poolCount := len(saved.TokenPool)
+		if len(saved.PoolAccounts) > poolCount {
+			poolCount = len(saved.PoolAccounts)
+		}
+		if poolCount < 1 {
+			poolCount = 1
+		}
+		quotaMax := auth.DefaultMonthlyAllowance * int64(poolCount)
+		quotaRem := auth.DefaultMonthlyAllowance * int64(poolCount)
+		if err == nil && ent != nil && poolCount == 1 {
 			quotaMax = ent.MaxBytes
 			quotaRem = ent.QuotaRemaining
 		}
@@ -121,9 +127,17 @@ func (a *App) startup(ctx context.Context) {
 			Subscribed:          true,
 			QuotaMaxBytes:       quotaMax,
 			QuotaRemainingBytes: quotaRem,
+			TokenPoolCount:      poolCount,
 		}
 		a.mu.Unlock()
 	}
+}
+
+// GetSavedUser returns the authenticated user restored from data/account.bin on startup.
+func (a *App) GetSavedUser() *UserInfo {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.currentUser
 }
 
 func (a *App) shutdown(ctx context.Context) {
@@ -140,7 +154,7 @@ func (a *App) appendLog(level, msg string) {
 	}
 }
 
-// Login signs into an existing Firefox Account. If FxA requires a 6-digit email verification code, RequiresVerification is true.
+// Login signs into an existing Firefox Account and persists credentials to data/account.bin.
 func (a *App) Login(email, password string) (*UserInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -168,6 +182,26 @@ func (a *App) Login(email, password string) (*UserInfo, error) {
 		return nil, err
 	}
 	return a.setAuthenticatedUser(saved, ent, 1), nil
+}
+
+// AddAccountToPool authenticates a secondary Firefox Account via real FxA PBKDF2-SHA256 + HKDF and saves it into data/account.bin.
+func (a *App) AddAccountToPool(email, password string) (*UserInfo, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	saved, ent, err := a.authSvc.AddAccountToPool(ctx, email, password)
+	if err != nil {
+		a.appendLog("ERROR", fmt.Sprintf("Pool account authentication failed for %s: %v", email, err))
+		return nil, err
+	}
+	count := len(saved.PoolAccounts)
+	if len(saved.TokenPool) > count {
+		count = len(saved.TokenPool)
+	}
+	if count < 1 {
+		count = 1
+	}
+	return a.setAuthenticatedUser(saved, ent, count), nil
 }
 
 // RegisterAccount creates a new Firefox Account directly inside the app and sends a 6-digit confirmation code to the user's email.
@@ -218,20 +252,29 @@ func (a *App) ImportTokenPool(tokens []string) (*UserInfo, error) {
 }
 
 func (a *App) setAuthenticatedUser(saved *auth.SavedTokens, ent *auth.Entitlement, poolCount int) *UserInfo {
+	if poolCount < 1 {
+		poolCount = 1
+	}
+	maxBytes := ent.MaxBytes
+	remBytes := ent.QuotaRemaining
+	if poolCount > 1 {
+		maxBytes = auth.DefaultMonthlyAllowance * int64(poolCount)
+		remBytes = auth.DefaultMonthlyAllowance * int64(poolCount)
+	}
 	u := &UserInfo{
 		Email:               saved.Email,
 		UID:                 saved.UID,
 		Verified:            true,
 		Subscribed:          true,
-		QuotaMaxBytes:       ent.MaxBytes,
-		QuotaRemainingBytes: ent.QuotaRemaining,
+		QuotaMaxBytes:       maxBytes,
+		QuotaRemainingBytes: remBytes,
 		QuotaResetEpoch:     ent.QuotaReset,
 		TokenPoolCount:      poolCount,
 	}
 	a.mu.Lock()
 	a.currentUser = u
 	a.mu.Unlock()
-	a.appendLog("INFO", fmt.Sprintf("Authenticated %s (50 GB Monthly Allowance Ready)", saved.Email))
+	a.appendLog("INFO", fmt.Sprintf("Authenticated %s and saved to data/account.bin (%d GB capacity)", saved.Email, poolCount*50))
 	return u
 }
 

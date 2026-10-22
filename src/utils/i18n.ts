@@ -164,12 +164,19 @@ export interface Translations {
   fullTunOptionDesc: string;
   proxyOptionTitle: string;
   proxyOptionDesc: string;
+  sessionBackupTitle: string;
+  sessionBackupDesc: string;
+  exportSessionBtn: string;
+  importSessionBtn: string;
+  sessionSavedToast: string;
+  sessionRestoredToast: string;
+  portableUpdateNotice: string;
 }
 
 export const translations: Record<Language, Translations> = {
   fa: {
     appName: 'FoxyVPN Windows',
-    version: '1.0.4',
+    version: '1.0.5',
     dashboard: 'داشبورد',
     auth: 'اکانت و ورود',
     settings: 'تنظیمات تونل',
@@ -325,12 +332,19 @@ export const translations: Record<Language, Translations> = {
     controlProxyPlaceholder: 'مثال: socks5://127.0.0.1:10808 یا http://127.0.0.1:7890',
     edgeOverrideLabel: 'آی‌پی اختصاصی سرور فاستلی (Edge IP Override)',
     edgeOverridePlaceholder: 'مثال: 23.235.42.8',
+    sessionBackupTitle: 'ذخیره خودکار باینری (data/account.bin)',
+    sessionBackupDesc: 'اکانت‌ها و توکن‌های شما به صورت رمزنگاری‌شده در فایل باینری data/account.bin ذخیره می‌شوند تا هنگام آپدیت نسخه پرتابل یا نصبی نیازی به لاگین مجدد نباشد.',
+    exportSessionBtn: 'پشتیبان‌گیری فایل account.bin',
+    importSessionBtn: 'بازیابی از account.bin',
+    sessionSavedToast: 'فایل باینری data/account.bin با موفقیت ذخیره شد',
+    sessionRestoredToast: 'اکانت‌ها از فایل باینری data/account.bin بازیابی شدند',
+    portableUpdateNotice: 'پشتیبانی از آپدیت بدون لاگین مجدد (Portable & Setup)',
   },
   en: {
     appName: 'FoxyVPN Windows',
-    version: '1.0.4',
+    version: '1.0.5',
     dashboard: 'Dashboard',
-    auth: 'Sign In / Account',
+    auth: 'Account',
     settings: 'Tunnel Settings',
     about: 'About App',
     quickConnect: 'Quick Connect',
@@ -484,5 +498,12 @@ export const translations: Record<Language, Translations> = {
     controlProxyPlaceholder: 'e.g. socks5://127.0.0.1:10808 or http://127.0.0.1:7890',
     edgeOverrideLabel: 'Fastly Edge IP Override (Optional)',
     edgeOverridePlaceholder: 'e.g. 23.235.42.8',
+    sessionBackupTitle: 'Auto Binary Storage (data/account.bin)',
+    sessionBackupDesc: 'Accounts and session tokens are automatically encrypted into data/account.bin (DPAPI + AES-256-GCM) so Portable and Setup updates never require signing in again.',
+    exportSessionBtn: 'Export data/account.bin',
+    importSessionBtn: 'Restore account.bin',
+    sessionSavedToast: 'Binary store data/account.bin saved automatically',
+    sessionRestoredToast: 'Account restored from data/account.bin without re-login',
+    portableUpdateNotice: 'Zero Re-Login Updates (Portable & Installer)',
   },
 };

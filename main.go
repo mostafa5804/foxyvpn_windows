@@ -29,15 +29,15 @@ func main() {
 	}()
 
 	err := wails.Run(&options.App{
-		Title:     "FoxyVPN — Mozilla Guardian & Wintun Client",
-		Width:     1120,
-		Height:    740,
-		MinWidth:  940,
+		Title:     "FoxyVPN v1.0.5 — Mozilla Guardian & Wintun Client",
+		Width:     400,
+		Height:    760,
+		MinWidth:  360,
 		MinHeight: 640,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		BackgroundColour: &options.RGBA{R: 11, G: 15, B: 23, A: 255},
+		BackgroundColour: &options.RGBA{R: 14, G: 17, B: 22, A: 255},
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,
 		Bind: []interface{}{

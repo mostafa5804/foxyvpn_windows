@@ -3,6 +3,8 @@ package auth
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -49,7 +51,9 @@ const (
 	controlPlaneHTTPTimeout    = 30 * time.Second
 	verificationMethodEmail2FA = "email-2fa"
 	fxaErrnoInvalidParameter   = 107
-	tokenFileName              = ".foxyvpn-tokens.json"
+	AccountBinRelPath          = "data/account.bin"
+	legacyTokenFileName        = ".foxyvpn-tokens.json"
+	binaryFileMagic            = "FOXYBIN1"
 	DefaultMonthlyAllowance    = int64(50) * 1024 * 1024 * 1024 // 50 GB
 )
 
@@ -82,16 +86,30 @@ type TokenResponse struct {
 	TokenType    string `json:"token_type"`
 }
 
-// SavedTokens persists OAuth and session credentials on disk.
+// PoolAccountRecord represents an authenticated Firefox Account stored inside data/account.bin.
+type PoolAccountRecord struct {
+	ID           string `json:"id"`
+	Email        string `json:"email"`
+	UID          string `json:"uid"`
+	SessionToken string `json:"session_token"`
+	AccessToken  string `json:"access_token,omitempty"`
+	QuotaGB      int    `json:"quota_gb"`
+	Active       bool   `json:"active"`
+	AddedAt      string `json:"added_at"`
+}
+
+// SavedTokens persists encrypted OAuth, session, and multi-account pool credentials inside data/account.bin.
 type SavedTokens struct {
-	Email        string    `json:"email"`
-	UID          string    `json:"uid"`
-	SessionToken string    `json:"session_token,omitempty"`
-	AccessToken  string    `json:"access_token"`
-	RefreshToken string    `json:"refresh_token"`
-	Scope        string    `json:"scope"`
-	ObtainedAt   time.Time `json:"obtained_at"`
-	ExpiresIn    int       `json:"expires_in"`
+	Email        string              `json:"email"`
+	UID          string              `json:"uid"`
+	SessionToken string              `json:"session_token,omitempty"`
+	AccessToken  string              `json:"access_token"`
+	RefreshToken string              `json:"refresh_token"`
+	Scope        string              `json:"scope"`
+	ObtainedAt   time.Time           `json:"obtained_at"`
+	ExpiresIn    int                 `json:"expires_in"`
+	TokenPool    []string            `json:"token_pool,omitempty"`
+	PoolAccounts []PoolAccountRecord `json:"pool_accounts,omitempty"`
 }
 
 func (s *SavedTokens) AccessTokenValid() bool {
@@ -1236,39 +1254,288 @@ func parseJWTExpiry(jwt string) int64 {
 	return claims.Exp
 }
 
-func tokenPath() string {
+// AddAccountToPool authenticates a secondary Firefox Account via PBKDF2-SHA256 + HKDF and stores it in data/account.bin.
+func (g *GuardianService) AddAccountToPool(ctx context.Context, email, password string) (*SavedTokens, *Entitlement, error) {
+	resp, err := g.Login(ctx, email, password)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !resp.Verified {
+		return nil, nil, ErrVerificationNeede
+	}
+	saved, ent, err := g.CompleteSessionLogin(ctx, email, resp.UID, resp.SessionToken)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	g.mu.Lock()
+	found := false
+	for i := range g.savedTokens.PoolAccounts {
+		if strings.EqualFold(g.savedTokens.PoolAccounts[i].Email, email) {
+			g.savedTokens.PoolAccounts[i].SessionToken = resp.SessionToken
+			g.savedTokens.PoolAccounts[i].AccessToken = saved.AccessToken
+			g.savedTokens.PoolAccounts[i].UID = resp.UID
+			g.savedTokens.PoolAccounts[i].Active = true
+			found = true
+		} else {
+			g.savedTokens.PoolAccounts[i].Active = false
+		}
+	}
+	if !found {
+		g.savedTokens.PoolAccounts = append(g.savedTokens.PoolAccounts, PoolAccountRecord{
+			ID:           fmt.Sprintf("acc-%d", time.Now().Unix()),
+			Email:        email,
+			UID:          resp.UID,
+			SessionToken: resp.SessionToken,
+			AccessToken:  saved.AccessToken,
+			QuotaGB:      50,
+			Active:       true,
+			AddedAt:      time.Now().Format("15:04:05"),
+		})
+	}
+	g.tokenPool = append(g.tokenPool, resp.SessionToken)
+	g.savedTokens.TokenPool = g.tokenPool
+	savedCopy := *g.savedTokens
+	g.mu.Unlock()
+
+	_ = g.SaveTokens(&savedCopy)
+	return &savedCopy, ent, nil
+}
+
+// accountBinPaths returns ordered candidate paths for data/account.bin:
+// 1. <exe_dir>/data/account.bin (Portable mode: persists alongside FoxyVPN-Portable.exe across updates)
+// 2. ./data/account.bin (Working directory data/account.bin)
+// 3. %LOCALAPPDATA%\FoxyVPN\data\account.bin (Installer mode: persists across NSIS Setup upgrades even when Program Files is read-only)
+func accountBinPaths() []string {
+	var paths []string
+	seen := make(map[string]bool)
+	addPath := func(p string) {
+		clean := filepath.Clean(p)
+		if !seen[clean] {
+			seen[clean] = true
+			paths = append(paths, clean)
+		}
+	}
+
+	if exePath, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exePath)
+		addPath(filepath.Join(exeDir, "data", "account.bin"))
+	}
+	addPath(filepath.Join("data", "account.bin"))
+
+	if cfgDir, err := os.UserConfigDir(); err == nil && cfgDir != "" {
+		addPath(filepath.Join(cfgDir, "FoxyVPN", "data", "account.bin"))
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		addPath(filepath.Join(home, ".foxyvpn", "data", "account.bin"))
+	}
+	return paths
+}
+
+func legacyTokenPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return tokenFileName
+		return legacyTokenFileName
 	}
-	return filepath.Join(home, tokenFileName)
+	return filepath.Join(home, legacyTokenFileName)
 }
 
-func (g *GuardianService) SaveTokens(tokens *SavedTokens) error {
-	data, err := json.MarshalIndent(tokens, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(tokenPath(), data, 0600)
+func deriveBinaryStorageKey() []byte {
+	host, _ := os.Hostname()
+	seed := "foxyvpn-v1.0.5-account-bin-key|" + host
+	sum := sha256.Sum256([]byte(seed))
+	return sum[:]
 }
 
-func (g *GuardianService) LoadTokens() (*SavedTokens, error) {
-	data, err := os.ReadFile(tokenPath())
+func encryptAccountBinary(tokens *SavedTokens) ([]byte, error) {
+	rawJSON, err := json.Marshal(tokens)
 	if err != nil {
 		return nil, err
 	}
+
+	key := deriveBinaryStorageKey()
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, err
+	}
+
+	sealed := gcm.Seal(nonce, nonce, rawJSON, []byte(binaryFileMagic))
+	protected, err := platformProtectBytes(sealed)
+	if err != nil {
+		protected = sealed
+	}
+
+	var buf bytes.Buffer
+	buf.WriteString(binaryFileMagic)
+	buf.Write(protected)
+	return buf.Bytes(), nil
+}
+
+func decryptAccountBinary(data []byte) (*SavedTokens, error) {
+	if !bytes.HasPrefix(data, []byte(binaryFileMagic)) {
+		// Legacy JSON fallback
+		var legacy SavedTokens
+		if err := json.Unmarshal(data, &legacy); err != nil {
+			return nil, errors.New("unrecognized account.bin binary header")
+		}
+		return &legacy, nil
+	}
+
+	payload := data[len(binaryFileMagic):]
+	unprotected, err := platformUnprotectBytes(payload)
+	if err == nil && len(unprotected) > 0 {
+		payload = unprotected
+	}
+
+	key := deriveBinaryStorageKey()
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	if len(payload) < gcm.NonceSize() {
+		return nil, errors.New("corrupted account.bin payload")
+	}
+
+	nonce := payload[:gcm.NonceSize()]
+	ciphertext := payload[gcm.NonceSize():]
+	plain, err := gcm.Open(nil, nonce, ciphertext, []byte(binaryFileMagic))
+	if err != nil {
+		return nil, err
+	}
+
 	var saved SavedTokens
-	if err := json.Unmarshal(data, &saved); err != nil {
+	if err := json.Unmarshal(plain, &saved); err != nil {
 		return nil, err
 	}
 	return &saved, nil
 }
 
+// SaveTokens encrypts and saves account credentials to data/account.bin for both Portable and Setup editions.
+func (g *GuardianService) SaveTokens(tokens *SavedTokens) error {
+	if tokens == nil {
+		return nil
+	}
+	g.mu.RLock()
+	if len(tokens.TokenPool) == 0 && len(g.tokenPool) > 0 {
+		tokens.TokenPool = append([]string(nil), g.tokenPool...)
+	}
+	g.mu.RUnlock()
+
+	binData, err := encryptAccountBinary(tokens)
+	if err != nil {
+		return err
+	}
+
+	var wroteAny bool
+	var lastErr error
+	for _, target := range accountBinPaths() {
+		dir := filepath.Dir(target)
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			lastErr = err
+			continue
+		}
+		if err := os.WriteFile(target, binData, 0600); err != nil {
+			lastErr = err
+			continue
+		}
+		wroteAny = true
+	}
+
+	// Remove any legacy plaintext .foxyvpn-tokens.json if present
+	secureWipeFile(legacyTokenPath())
+
+	if wroteAny {
+		g.log("INFO", "Saved encrypted account session to binary store (data/account.bin)")
+		return nil
+	}
+	return lastErr
+}
+
+// LoadTokens loads and decrypts the persistent account session from data/account.bin (or migrates legacy tokens).
+func (g *GuardianService) LoadTokens() (*SavedTokens, error) {
+	for _, candidate := range accountBinPaths() {
+		data, err := os.ReadFile(candidate)
+		if err != nil || len(data) == 0 {
+			continue
+		}
+		saved, err := decryptAccountBinary(data)
+		if err != nil || saved == nil || (saved.AccessToken == "" && saved.SessionToken == "") {
+			continue
+		}
+		g.mu.Lock()
+		g.savedTokens = saved
+		if len(saved.TokenPool) > 0 {
+			g.tokenPool = append([]string(nil), saved.TokenPool...)
+		}
+		g.mu.Unlock()
+		// Ensure all portable/installer paths are synced
+		_ = g.SaveTokens(saved)
+		return saved, nil
+	}
+
+	// Migrate legacy .foxyvpn-tokens.json if found
+	if legacyData, err := os.ReadFile(legacyTokenPath()); err == nil && len(legacyData) > 0 {
+		var saved SavedTokens
+		if err := json.Unmarshal(legacyData, &saved); err == nil && saved.AccessToken != "" {
+			g.mu.Lock()
+			g.savedTokens = &saved
+			g.mu.Unlock()
+			_ = g.SaveTokens(&saved)
+			secureWipeFile(legacyTokenPath())
+			g.log("INFO", "Migrated legacy session into encrypted binary file data/account.bin")
+			return &saved, nil
+		}
+	}
+
+	return nil, os.ErrNotExist
+}
+
+func secureWipeFile(path string) {
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		size := info.Size()
+		if size > 0 && size < 10*1024*1024 {
+			zeros := make([]byte, size)
+			_ = os.WriteFile(path, zeros, 0600)
+		}
+		_ = os.Remove(path)
+	}
+}
+
+// Logout invalidates the active FxA session token and securely wipes data/account.bin across all paths.
 func (g *GuardianService) Logout() {
 	g.mu.Lock()
+	var sessTok string
+	if g.savedTokens != nil {
+		sessTok = g.savedTokens.SessionToken
+	}
 	g.savedTokens = nil
 	g.pendingSession = nil
 	g.tokenPool = nil
 	g.mu.Unlock()
-	_ = os.Remove(tokenPath())
+
+	if sessTok != "" && len(sessTok) >= 32 {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if id, reqKey, _, err := deriveHawkCredentials(sessTok, "sessionToken"); err == nil {
+			_, _ = g.fxaHawkPost(ctx, "/session/destroy", map[string]interface{}{}, id, reqKey)
+		}
+		cancel()
+	}
+
+	for _, p := range accountBinPaths() {
+		secureWipeFile(p)
+	}
+	secureWipeFile(legacyTokenPath())
 }

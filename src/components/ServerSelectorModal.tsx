@@ -59,18 +59,14 @@ export const ServerSelectorModal: React.FC<ServerSelectorModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="server-modal-title"
-      className="absolute inset-0 z-50 bg-black/60 backdrop-blur-xs flex flex-col p-2 rounded-[10px] overflow-hidden animate-in fade-in duration-150"
+      className="absolute inset-0 z-50 bg-black/60 backdrop-blur-xs flex flex-col p-0 overflow-hidden animate-in fade-in duration-150"
       style={{ boxSizing: 'border-box' }}
     >
-      {/* 
-        Compact modal window constrained strictly to the desktop app width (max 360px),
-        preventing any window overflow.
-      */}
       <div
-        className={`w-full h-full rounded-[9px] border p-3 flex flex-col shadow-2xl overflow-hidden transition-colors ${
+        className={`w-full h-full p-3 flex flex-col overflow-hidden transition-colors ${
           isDark
-            ? 'bg-[#0E1116] border-[#2A323D] text-[#E8ECF1]'
-            : 'bg-[#FAF9F5] border-[#D4D8DE] text-[#111827]'
+            ? 'bg-[#0E1116] text-[#E8ECF1]'
+            : 'bg-[#FAF9F5] text-[#111827]'
         }`}
         style={{ boxSizing: 'border-box' }}
       >

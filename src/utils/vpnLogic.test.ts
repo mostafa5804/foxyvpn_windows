@@ -112,3 +112,44 @@ test('filterAndSortServers filters by country/city and sorts by latency', () => 
   assert.equal(filtered[0].countryCode, 'DE');
   assert.equal(countryCodeToFlag('DE'), '🇩🇪');
 });
+
+test('encodeAccountBinPayload and decodeAccountBinPayload round-trip data/account.bin binary store', async () => {
+  const { encodeAccountBinPayload, decodeAccountBinPayload, ACCOUNT_BIN_MAGIC, APP_VERSION } = await import('./vpnLogic.ts');
+  assert.equal(APP_VERSION, '1.0.5');
+
+  const snapshot = {
+    version: APP_VERSION,
+    magic: ACCOUNT_BIN_MAGIC,
+    savedAt: 1761000000000,
+    user: {
+      email: 'persistent@firefox.com',
+      uid: 'uid-105',
+      verified: true,
+      requiresVerification: false,
+      subscribed: true,
+      quotaMaxBytes: FIFTY_GB_BYTES,
+      quotaRemainingBytes: FIFTY_GB_BYTES,
+      quotaResetEpoch: 1763592000,
+      tokenPoolCount: 1,
+    },
+    pool: [
+      {
+        id: 'acc-1',
+        email: 'persistent@firefox.com',
+        token: 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90',
+        quotaGB: 50,
+        active: true,
+        addedAt: '12:00:00',
+      },
+    ],
+  };
+
+  const binary = encodeAccountBinPayload(snapshot);
+  assert.equal(binary.length > 8, true);
+  const decoded = decodeAccountBinPayload(binary);
+  assert.ok(decoded);
+  assert.equal(decoded.version, '1.0.5');
+  assert.equal(decoded.user?.email, 'persistent@firefox.com');
+  assert.equal(decoded.pool.length, 1);
+});
+

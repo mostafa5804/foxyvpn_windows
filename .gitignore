@@ -7,3 +7,6 @@ coverage/
 .env*
 !.env.example
 .aistudio/
+.playwright-cli/
+data/account.bin
+.foxyvpn-tokens.json

@@ -2,12 +2,12 @@
 
 <img src="public/foxyvpn-windows-logo.svg" alt="FoxyVPN Windows Logo" width="130" height="130" />
 
-# 🦊🪟 FoxyVPN Windows (v1.0.4)
+# 🦊🪟 FoxyVPN Windows (v1.0.5)
 
 **Native, Open-Source & Unlimited Multi-Account Desktop VPN for Windows 10 & 11**  
 **کلاینت دسکتاپ بومی، پرتابل، متن‌باز و چنداکانته فایرفاکس VPN برای ویندوز ۱۰ و ۱۱**
 
-[![Version](https://img.shields.io/badge/Version-1.0.4%20Stable-orange?style=for-the-badge&logo=github)](https://github.com/mostafa5804/foxyvpn_windows/releases)
+[![Version](https://img.shields.io/badge/Version-1.0.5%20Stable-orange?style=for-the-badge&logo=github)](https://github.com/mostafa5804/foxyvpn_windows/releases)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011%20(x64)-0078D6?style=for-the-badge&logo=windows&logoColor=white)](#)
 [![Built With](https://img.shields.io/badge/Built%20With-Wails%20v2%20%2B%20Go%201.23-00ADD8?style=for-the-badge&logo=go&logoColor=white)](#)
 [![Monthly Quota](https://img.shields.io/badge/Traffic-50%20GB%20%2F%20Account%20(Unlimited%20Pool)-FE6C31?style=for-the-badge&logo=firefox-browser&logoColor=white)](#)
@@ -16,7 +16,7 @@
 
 <br />
 
-[English Documentation](#-english-documentation) • [راهنمای فارسی](#-راهنمای-فارسی) • [Releases / دانلود نسخه جدید](https://github.com/mostafa5804/foxyvpn_windows/releases)
+[English Documentation](#-english-documentation) • [Security & Verification](#-security-architecture--reproducible-builds) • [راهنمای فارسی](#-راهنمای-فارسی) • [Releases / دانلود نسخه جدید](https://github.com/mostafa5804/foxyvpn_windows/releases)
 
 ---
 
@@ -29,14 +29,12 @@
 ## 🌟 Overview
 **FoxyVPN Windows** is a high-performance, lightweight, open-source Windows desktop VPN client. It allows you to tunnel your entire operating system or browser traffic through **Mozilla Guardian's free 50 GB monthly allowance** over Fastly's globally distributed HTTP/2 CONNECT (MASQUE) edge topology.
 
-### What's New in v1.0.4:
-- **No-Scroll Single Viewport UI:** Sleek, compact Windows Fluent Bento layout designed to fit entirely on screen without window scrollbars.
-- **Copy Logs Button:** One-click clipboard copy with status confirmation in the diagnostic control-plane console.
-- **Automatic Smart Server Selection:** Default auto-connects to the node with the lowest live ping and best connectivity.
-- **Real Ping Latency Measurement:** Real-time TCP handshake socket timing across all Fastly edge regions with a live refresh button.
-- **Persistent Session Storage:** Full login, settings, and multi-account pool persistence across app restarts (Portable & Setup).
-- **Clean Initial State:** Zero hardcoded demo accounts; secure user-authenticated session management.
-- **Bilingual Interface:** Instant FA/EN toggle with Vazirmatn Persian typography (RTL) and default Light theme.
+### What's New in v1.0.5:
+- **Encrypted Binary Account Store (`data/account.bin`):** Replaced legacy plaintext `.foxyvpn-tokens.json` with an encrypted binary store (`FOXYBIN1` + Windows DPAPI `CryptProtectData` + AES-256-GCM) saved automatically to `data/account.bin` (both Portable directory and `%LOCALAPPDATA%\FoxyVPN\data\account.bin`) so Portable and Setup updates never require signing in again.
+- **Zero-Margin Full-Bleed Window:** Eliminated surrounding white borders and empty margins around the compact Windows client window (`400×760` native frame).
+- **Wintun v0.14.1 SHA-256 Verification & Unstripped PE Symbols:** CI verifies the official WireGuard `wintun-0.14.1.zip` SHA-256 (`07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51`), removes `-s` symbol stripping to prevent Microsoft Defender ML false positives (`Trojan:Win32/Bearfoos.B!ml`), and publishes `SHA256SUMS.txt` on every release.
+- **Clean English Footer Navigation:** Updated the English footer tab label from `Sign In / Account` to `Account`.
+- **Real FxA Authentication for Account Pool:** Production Wails builds authenticate pool accounts via `window.go.main.App.AddAccountToPool` (PBKDF2-SHA256 + HKDF + Hawk) and securely destroy sessions (`POST /v1/session/destroy`) + zero-wipe `data/account.bin` on sign-out.
 
 ---
 
@@ -86,6 +84,27 @@ Download the latest pre-compiled binaries from **[GitHub Releases](https://githu
 - 💿 **`FoxyVPN-Setup.exe`:** Standard NSIS Windows Installer with desktop & Start Menu shortcuts.
 - 🗜️ **`FoxyVPN-Windows-amd64.zip`:** Portable archive containing binary and documentation.
 
+## 🔒 Security Architecture & Reproducible Builds
+
+1. **Encrypted Binary Credential Storage (`data/account.bin`):**
+   - Plaintext `.foxyvpn-tokens.json` has been removed and replaced with `data/account.bin` (`pkg/auth/guardian.go` & `pkg/auth/dpapi_windows.go`).
+   - Tokens are encrypted at rest using **AES-256-GCM** combined with **Windows DPAPI (`CryptProtectData` with `CRYPTPROTECT_UI_FORBIDDEN`)** bound to the current Windows user context and written with `0600` file permissions.
+   - To support **seamless Portable & Setup updates without re-login**, `data/account.bin` is stored in `<exe_dir>/data/account.bin` (Portable) and mirrored in `%LOCALAPPDATA%\FoxyVPN\data\account.bin` (Setup Installer).
+   - Signing out invokes Mozilla FxA `POST /v1/session/destroy` (Hawk HMAC-SHA256) to revoke the session server-side and overwrites `data/account.bin` with zeros before deletion.
+2. **Wintun v0.14.1 Binary & Checksum Verification:**
+   - `pkg/vpn/wintun.dll` in the Git source tree is intentionally a 45-byte text stub (`WINTUN_PLACEHOLDER_REPLACED_AT_CI_BUILD_TIME`) to avoid committing binary blobs to Git while satisfying Go's `//go:embed wintun.dll` directive.
+   - During the GitHub Actions build (`.github/workflows/build-windows.yml`), the official WireGuard **Wintun v0.14.1** archive (`https://www.wintun.net/builds/wintun-0.14.1.zip`) is downloaded and cryptographically verified against its official SHA-256 checksum (`07C256185D6EE3652E09FA55C0B673E2624B565E02C4B9091C79CA7D2F24EF51`) before embedding `wintun/bin/amd64/wintun.dll` (digitally signed by *WireGuard LLC*).
+3. **Windows Defender `Trojan:Win32/Bearfoos.B!ml` False-Positive Mitigation:**
+   - Earlier builds compiled with `wails build -s` (`-ldflags="-s -w"` symbol stripping) and extracted `wintun.dll` on startup, which triggered Microsoft Defender's heuristic machine-learning detector (`Bearfoos.B!ml` — a generic ML heuristic common to unsigned, symbol-stripped Go network utilities).
+   - In **v1.0.5**, symbol stripping (`-s`) is removed so standard Go PE symbol tables remain intact, `wintun.dll` is only loaded when the user explicitly starts a TUN session, and every GitHub Release includes `SHA256SUMS.txt` generated directly by the public GitHub Actions workflow.
+4. **Network Endpoints Used by the Application:**
+   - `https://api.accounts.firefox.com/v1/*` — Official Mozilla Firefox Accounts (FxA) authentication & OAuth token exchange.
+   - `https://vpn.mozilla.org/api/v1/fpn/*` — Official Mozilla Guardian FPN entitlement status & short-lived ProxyPass JWT issuance.
+   - `https://firefox.settings.services.mozilla.com/v1/buckets/main/collections/vpn-serverlist/records` — Official Mozilla Remote Settings server list.
+   - `*.m1.fastly-masque.net:2499` — Official Fastly HTTP/2 CONNECT edge nodes.
+   - `https://1.1.1.1/dns-query`, `https://9.9.9.9/dns-query`, `https://8.8.8.8/dns-query` — Encrypted DNS over HTTPS (DoH) resolvers.
+   - `https://cloudflare.com/cdn-cgi/trace` — Exit IP verification through the active VPN tunnel.
+
 ---
 
 <br />
@@ -95,14 +114,11 @@ Download the latest pre-compiled binaries from **[GitHub Releases](https://githu
 ## 🌟 معرفی پروژه
 **FoxyVPN Windows** یک کلاینت دسکتاپ بومی، سریع، پرتابل و متن‌باز برای ویندوز ۱۰ و ۱۱ است که به شما امکان می‌دهد از **سهمیه ۵۰ گیگابایت ماهانه رایگان موزیلا** (ارائه‌شده روی سرورهای Fastly با پروتکل HTTP/2 CONNECT و کارت شبکه مجازی Wintun) در **کل سیستم‌عامل ویندوز** استفاده کنید.
 
-### امکانات جدید در نسخه ۱.۰.۴ (v1.0.4):
-- **طراحی بدون نیاز به اسکرول (Single Viewport):** چیدمان فشرده، زیبا و بهینه‌شده به سبک Windows Fluent Bento که کل پنجره داشبورد را بدون نوار اسکرول صفحه‌ای نمایش می‌دهد.
-- **دکمه کپی لاگ‌ها:** کپی سریع و تک‌کلیکه کل لاگ‌های تشخیصی به حافظه کلیپ‌بورد همراه با نشان تایید «✓ کپی شد!».
-- **انتخاب سرور اتوماتیک (پیش‌فرض):** اتصال خودکار و هوشمند به نزدیک‌ترین سرور دارای کمترین پینگ زنده و بالاترین پایداری.
-- **سنجش پینگ واقعی سرورها:** اندازه‌گیری دقیق زمان رفت و برگشت سوکت TCP با سرورهای Fastly و دکمه «تست مجدد پینگ‌ها».
-- **ماندگاری کامل اطلاعات در حافظه (Persistence):** ذخیره همیشگی وضعیت لاگین، سهمیه و استخر اکانت‌ها در نسخه پرتابل و نصبی.
-- **حذف کامل اکانت‌های دمو:** وضعیت اولیه کاملاً پاک و استاندارد جهت ورود هر کاربر با اکانت اختصاصی خود.
-- **دو زبانه کامل فارسی و انگلیسی:** سوییچ لحظه‌ای بین فارسی (با فونت وزیرمتن و راست‌به‌چپ) و انگلیسی، با تم پیش‌فرض روشن (Light) و دکمه تم تاریک.
+### امکانات جدید در نسخه ۱.۰.۵ (v1.0.5):
+- **ذخیره خودکار اکانت در فایل باینری رمزنگاری‌شده (`data/account.bin`):** ذخیره‌سازی خودکار اکانت و استخر توکن‌ها در فایل باینری `data/account.bin` (رمزنگاری‌شده با Windows DPAPI + AES-256-GCM) در کنار فایل اجرایی و مسیر `%LOCALAPPDATA%\FoxyVPN\data\account.bin`؛ با این قابلیت، هنگام **آپدیت نسخه پرتابل یا نصبی نیازی به لاگین مجدد نیست**.
+- **حذف کامل فضای خالی و حاشیه‌های سفید اطراف پنجره:** طراحی تمام‌صفحه بدون کادر یا حاشیه سفید اضافه در اطراف پنجره برنامه.
+- **اصلاح متن فوتر انگلیسی:** تغییر عنوان تب اکانت در فوتر انگلیسی از `Sign In / Account` به `Account`.
+- **بررسی رمزنگاری SHA-256 درایور Wintun و رفع هشدار کاذب Windows Defender:** بررسی هش رسمی `wintun-0.14.1.zip` در گیت‌هاب اکشنز، حذف فلگ فشرده‌سازی جدول سمبل‌ها (`-s`) جهت جلوگیری از تشخیص کاذب هوش مصنوعی ویندوز دیفندر (`Bearfoos.B!ml`) و انتشار فایل `SHA256SUMS.txt`.
 
 ---
 

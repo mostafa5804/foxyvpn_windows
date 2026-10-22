@@ -190,16 +190,19 @@ export default function App() {
     vpnBridge.getLogs().then((l) => {
       if (mounted && l.length > 0) setLogs(l);
     });
-    const u = vpnBridge.getCurrentUser();
-    if (u) {
-      setUser(u);
-      setStatus((prev) => ({
-        ...prev,
-        quotaMaxBytes: u.quotaMaxBytes,
-        quotaRemainingBytes: u.quotaRemainingBytes,
-      }));
-    }
-    setAccountList(vpnBridge.getAccountPool());
+    vpnBridge.syncNativeSavedAccount().then((syncedUser) => {
+      if (!mounted) return;
+      const u = syncedUser || vpnBridge.getCurrentUser();
+      if (u) {
+        setUser(u);
+        setStatus((prev) => ({
+          ...prev,
+          quotaMaxBytes: u.quotaMaxBytes,
+          quotaRemainingBytes: u.quotaRemainingBytes,
+        }));
+      }
+      setAccountList(vpnBridge.getAccountPool());
+    });
     return () => {
       mounted = false;
     };
@@ -562,22 +565,68 @@ export default function App() {
   const ChevronNext = lang === 'fa' ? ChevronLeft : ChevronRight;
   const ArrowNext = lang === 'fa' ? ArrowLeft : ArrowRight;
 
+  // Export data/account.bin binary file
+  const handleExportAccountBin = () => {
+    try {
+      const bytes = vpnBridge.exportAccountBinBytes();
+      const blob = new Blob([bytes], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'account.bin';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setAuthSuccess(t.sessionSavedToast);
+    } catch (err: unknown) {
+      setAuthError(err instanceof Error ? err.message : 'Failed to export account.bin');
+    }
+  };
+
+  // Restore from data/account.bin binary file
+  const handleImportAccountBin = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const buf = new Uint8Array(reader.result as ArrayBuffer);
+        const restored = vpnBridge.importAccountBinBytes(buf);
+        setUser(restored);
+        setAccountList(vpnBridge.getAccountPool());
+        if (restored) {
+          setStatus((prev) => ({
+            ...prev,
+            quotaMaxBytes: restored.quotaMaxBytes,
+            quotaRemainingBytes: restored.quotaRemainingBytes,
+          }));
+        }
+        setAuthError(null);
+        setAuthSuccess(t.sessionRestoredToast);
+      } catch (err: unknown) {
+        setAuthError(err instanceof Error ? err.message : 'Invalid account.bin file');
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = '';
+  };
+
   return (
     <div
       dir={lang === 'fa' ? 'rtl' : 'ltr'}
-      className={`min-h-screen w-full flex items-center justify-center p-0 sm:p-4 select-none transition-colors ${
+      className={`w-screen h-screen m-0 p-0 overflow-hidden select-none transition-colors ${
         lang === 'fa' ? 'font-vazirmatn' : 'font-sans'
-      } ${isDark ? 'bg-[#07090D] text-[#E8ECF1]' : 'bg-[#FAF9F5] text-[#111827]'}`}
+      } ${isDark ? 'bg-[#0E1116] text-[#E8ECF1]' : 'bg-[#FAF9F5] text-[#111827]'}`}
     >
       {/* 
-        Windows Desktop Client Window Frame (matching reference HTML exactly):
-        width: 360px - 380px, height: 900px, max-height: 100vh, border-radius: 10px, overflow: hidden
+        Full-Bleed Edge-to-Edge Window (Zero surrounding white borders or empty margins)
       */}
       <div
-        className={`w-full max-w-[360px] sm:w-[360px] h-[900px] max-h-screen relative flex flex-col rounded-[10px] overflow-hidden border shadow-2xl transition-colors shrink-0 ${
+        className={`app-window w-full h-full relative flex flex-col rounded-none border-0 overflow-hidden transition-colors shrink-0 ${
           isDark
-            ? 'bg-[#0E1116] border-[#2A323D] text-[#E8ECF1] shadow-black/80'
-            : 'bg-[#FAF9F5] border-[#D4D8DE] text-[#111827] shadow-xl'
+            ? 'bg-[#0E1116] text-[#E8ECF1]'
+            : 'bg-[#FAF9F5] text-[#111827]'
         }`}
         style={{ boxSizing: 'border-box', fontSize: '13px', lineHeight: 1.5 }}
       >
@@ -693,8 +742,10 @@ export default function App() {
                     }`}
                   ></span>
                   <span
-                    dir="ltr"
-                    className="font-mono text-[11px] text-[#C5CDD6] overflow-hidden text-ellipsis whitespace-nowrap"
+                    dir={user || accountList.length > 0 ? 'ltr' : undefined}
+                    className={`text-[11.5px] overflow-hidden text-ellipsis whitespace-nowrap ${
+                      user || accountList.length > 0 ? 'font-mono' : 'font-semibold'
+                    } ${isDark ? 'text-[#C5CDD6]' : 'text-slate-700'}`}
                   >
                     {activeEmail}
                   </span>
@@ -1026,8 +1077,10 @@ export default function App() {
 
                 <span className="flex-1 min-w-0 flex flex-col">
                   <span
-                    dir="ltr"
-                    className="font-mono text-[12px] overflow-hidden text-ellipsis whitespace-nowrap text-right font-medium"
+                    dir={user || accountList.length > 0 ? 'ltr' : undefined}
+                    className={`text-[12px] overflow-hidden text-ellipsis whitespace-nowrap font-medium ${
+                      user || accountList.length > 0 ? 'font-mono text-right' : ''
+                    }`}
                   >
                     {activeEmail}
                   </span>
@@ -1047,6 +1100,54 @@ export default function App() {
                     <LogOut className="w-4 h-4" />
                   </button>
                 )}
+              </div>
+
+              {/* Automatic Binary Account Storage Card (data/account.bin) */}
+              <div
+                className={`p-3 rounded-[12px] border flex flex-col gap-2 ${
+                  isDark ? 'bg-[#10261F]/40 border-[#2DD4A0]/30' : 'bg-emerald-50/70 border-emerald-200'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-1.5 font-bold text-[12px] text-[#2DD4A0]">
+                    <ShieldCheck className="w-4 h-4 shrink-0" />
+                    <span>{t.sessionBackupTitle}</span>
+                  </span>
+                  <span dir="ltr" className="font-mono text-[10.5px] font-bold px-2 py-0.5 rounded bg-[#2DD4A0]/15 text-[#2DD4A0]">
+                    data/account.bin
+                  </span>
+                </div>
+                <p className={`text-[11px] leading-relaxed m-0 ${isDark ? 'text-[#A5AFBB]' : 'text-slate-600'}`}>
+                  {t.sessionBackupDesc}
+                </p>
+                <div className="grid grid-cols-2 gap-2 pt-0.5">
+                  <button
+                    type="button"
+                    onClick={handleExportAccountBin}
+                    className={`h-[34px] rounded-[8px] border text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                      isDark
+                        ? 'border-[#2DD4A0]/40 bg-[#10261F] text-[#2DD4A0] hover:bg-[#10261F]/80'
+                        : 'border-emerald-300 bg-white text-emerald-700 hover:bg-emerald-50'
+                    }`}
+                  >
+                    <span>{t.exportSessionBtn}</span>
+                  </button>
+                  <label
+                    className={`h-[34px] rounded-[8px] border text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                      isDark
+                        ? 'border-[#2A323D] bg-[#0E1116] text-[#C5CDD6] hover:text-white'
+                        : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    <span>{t.importSessionBtn}</span>
+                    <input
+                      type="file"
+                      accept=".bin,application/octet-stream"
+                      onChange={handleImportAccountBin}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
               </div>
 
               {/* Login / Register / Pool Form Card */}
@@ -1144,13 +1245,13 @@ export default function App() {
                           value={authEmail}
                           onChange={(e) => setAuthEmail(e.target.value)}
                           placeholder="you@example.com"
-                          className={`w-full box-border h-[44px] rounded-[10px] text-[13px] px-3.5 pe-10 border transition-colors outline-none focus:border-[#FF7A1A] ${
+                          className={`w-full box-border h-[44px] rounded-[10px] text-[13px] pl-3.5 pr-10 border transition-colors outline-none focus:border-[#FF7A1A] ${
                             isDark
                               ? 'bg-[#0E1116] border-[#2A323D] text-[#E8ECF1]'
                               : 'bg-slate-50 border-slate-300 text-slate-900'
                           }`}
                         />
-                        <Mail className="absolute end-3.5 top-3 w-[18px] h-[18px] text-[#7C8793] pointer-events-none" />
+                        <Mail className="absolute right-3.5 top-3 w-[18px] h-[18px] text-[#7C8793] pointer-events-none" />
                       </div>
                     </div>
 
@@ -1166,13 +1267,13 @@ export default function App() {
                           value={authPassword}
                           onChange={(e) => setAuthPassword(e.target.value)}
                           placeholder="••••••••"
-                          className={`w-full box-border h-[44px] rounded-[10px] text-[13px] px-3.5 pe-10 border transition-colors outline-none focus:border-[#FF7A1A] ${
+                          className={`w-full box-border h-[44px] rounded-[10px] text-[13px] pl-3.5 pr-10 border transition-colors outline-none focus:border-[#FF7A1A] ${
                             isDark
                               ? 'bg-[#0E1116] border-[#2A323D] text-[#E8ECF1]'
                               : 'bg-slate-50 border-slate-300 text-slate-900'
                           }`}
                         />
-                        <Lock className="absolute end-3.5 top-3 w-[18px] h-[18px] text-[#7C8793] pointer-events-none" />
+                        <Lock className="absolute right-3.5 top-3 w-[18px] h-[18px] text-[#7C8793] pointer-events-none" />
                       </div>
                     </div>
 
@@ -1243,13 +1344,13 @@ export default function App() {
                           value={authEmail}
                           onChange={(e) => setAuthEmail(e.target.value)}
                           placeholder="you@example.com"
-                          className={`w-full box-border h-[44px] rounded-[10px] text-[13px] px-3.5 pe-10 border transition-colors outline-none focus:border-[#FF7A1A] ${
+                          className={`w-full box-border h-[44px] rounded-[10px] text-[13px] pl-3.5 pr-10 border transition-colors outline-none focus:border-[#FF7A1A] ${
                             isDark
                               ? 'bg-[#0E1116] border-[#2A323D] text-[#E8ECF1]'
                               : 'bg-slate-50 border-slate-300 text-slate-900'
                           }`}
                         />
-                        <Mail className="absolute end-3.5 top-3 w-[18px] h-[18px] text-[#7C8793] pointer-events-none" />
+                        <Mail className="absolute right-3.5 top-3 w-[18px] h-[18px] text-[#7C8793] pointer-events-none" />
                       </div>
                     </div>
 
@@ -1265,13 +1366,13 @@ export default function App() {
                           value={authPassword}
                           onChange={(e) => setAuthPassword(e.target.value)}
                           placeholder={lang === 'fa' ? 'حداقل ۸ کاراکتر' : 'At least 8 chars'}
-                          className={`w-full box-border h-[44px] rounded-[10px] text-[13px] px-3.5 pe-10 border transition-colors outline-none focus:border-[#FF7A1A] ${
+                          className={`w-full box-border h-[44px] rounded-[10px] text-[13px] pl-3.5 pr-10 border transition-colors outline-none focus:border-[#FF7A1A] ${
                             isDark
                               ? 'bg-[#0E1116] border-[#2A323D] text-[#E8ECF1]'
                               : 'bg-slate-50 border-slate-300 text-slate-900'
                           }`}
                         />
-                        <Lock className="absolute end-3.5 top-3 w-[18px] h-[18px] text-[#7C8793] pointer-events-none" />
+                        <Lock className="absolute right-3.5 top-3 w-[18px] h-[18px] text-[#7C8793] pointer-events-none" />
                       </div>
                     </div>
 
@@ -1321,13 +1422,13 @@ export default function App() {
                           value={authEmail}
                           onChange={(e) => setAuthEmail(e.target.value)}
                           placeholder="account2@example.com"
-                          className={`w-full box-border h-[44px] rounded-[10px] text-[13px] px-3.5 pe-10 border transition-colors outline-none focus:border-[#FF7A1A] ${
+                          className={`w-full box-border h-[44px] rounded-[10px] text-[13px] pl-3.5 pr-10 border transition-colors outline-none focus:border-[#FF7A1A] ${
                             isDark
                               ? 'bg-[#0E1116] border-[#2A323D] text-[#E8ECF1]'
                               : 'bg-slate-50 border-slate-300 text-slate-900'
                           }`}
                         />
-                        <Mail className="absolute end-3.5 top-3 w-[18px] h-[18px] text-[#7C8793] pointer-events-none" />
+                        <Mail className="absolute right-3.5 top-3 w-[18px] h-[18px] text-[#7C8793] pointer-events-none" />
                       </div>
                     </div>
 
@@ -1343,13 +1444,13 @@ export default function App() {
                           value={authPassword}
                           onChange={(e) => setAuthPassword(e.target.value)}
                           placeholder="••••••••"
-                          className={`w-full box-border h-[44px] rounded-[10px] text-[13px] px-3.5 pe-10 border transition-colors outline-none focus:border-[#FF7A1A] ${
+                          className={`w-full box-border h-[44px] rounded-[10px] text-[13px] pl-3.5 pr-10 border transition-colors outline-none focus:border-[#FF7A1A] ${
                             isDark
                               ? 'bg-[#0E1116] border-[#2A323D] text-[#E8ECF1]'
                               : 'bg-slate-50 border-slate-300 text-slate-900'
                           }`}
                         />
-                        <Lock className="absolute end-3.5 top-3 w-[18px] h-[18px] text-[#7C8793] pointer-events-none" />
+                        <Lock className="absolute right-3.5 top-3 w-[18px] h-[18px] text-[#7C8793] pointer-events-none" />
                       </div>
                     </div>
 
@@ -1826,7 +1927,7 @@ export default function App() {
                     dir="ltr"
                     className="font-mono text-[11px] font-bold text-[#FF9A4D] bg-[#241609] border border-[#6B3A12] rounded-[20px] px-2.5 py-0.5"
                   >
-                    v1.0.4
+                    v1.0.5
                   </span>
                   <span
                     dir="ltr"
@@ -1951,7 +2052,7 @@ export default function App() {
                 >
                   <span className="text-[11px] text-[#8B96A3]">{t.appVersionLabel}</span>
                   <span dir="ltr" className="font-mono text-[12px] font-bold text-[#FF9A4D] text-right">
-                    1.0.4 Stable
+                    1.0.5 Stable
                   </span>
                 </div>
 

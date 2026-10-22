@@ -27,11 +27,12 @@ const (
 	RingCap     = 0x400000 // 4 MB Wintun ring buffer
 )
 
-// EnsureWintunDriver extracts the embedded wintun.dll next to the running executable
-// so FoxyVPN-Portable.exe works as a 100% standalone single-file executable.
+// EnsureWintunDriver extracts the embedded official WireGuard Wintun v0.14.1 (amd64) driver
+// lazily when a TUN session is initiated. In the git repository, pkg/vpn/wintun.dll is a 45-byte
+// text placeholder replaced during CI build after verifying the official wintun-0.14.1.zip SHA-256 hash.
 func EnsureWintunDriver() error {
-	// Official wintun.dll (amd64) is ~450 KB; ignore tiny CI placeholder
-	if len(embeddedWintunDLL) < 64*1024 {
+	// Official wintun.dll (amd64 v0.14.1) is ~450 KB and starts with DOS/PE magic "MZ"
+	if len(embeddedWintunDLL) < 64*1024 || embeddedWintunDLL[0] != 'M' || embeddedWintunDLL[1] != 'Z' {
 		return nil
 	}
 
@@ -43,10 +44,10 @@ func EnsureWintunDriver() error {
 	}
 
 	for _, p := range targetPaths {
-		if info, err := os.Stat(p); err == nil && info.Size() > 64*1024 {
+		if info, err := os.Stat(p); err == nil && info.Size() == int64(len(embeddedWintunDLL)) {
 			continue
 		}
-		_ = os.WriteFile(p, embeddedWintunDLL, 0644)
+		_ = os.WriteFile(p, embeddedWintunDLL, 0600)
 	}
 	return nil
 }
