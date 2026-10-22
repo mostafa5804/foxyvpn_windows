@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vauth/foxyvpn-windows/pkg/auth"
-	"github.com/vauth/foxyvpn-windows/pkg/vpn"
+	"github.com/mostafa5804/foxyvpn_windows/pkg/auth"
+	"github.com/mostafa5804/foxyvpn_windows/pkg/vpn"
 )
 
 // UserInfo represents the authenticated Firefox Account and its 50 GB monthly Guardian quota.

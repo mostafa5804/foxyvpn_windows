@@ -112,6 +112,10 @@ jobs:
           # Built without -s (symbol stripping) so standard Go PE symbol tables remain intact,
           # avoiding heuristic ML false-positive detections (e.g. Bearfoos.B!ml) in Windows Defender.
           wails build -platform windows/amd64 -clean -o FoxyVPN.exe
+          if ($LASTEXITCODE -ne 0) {
+            throw "wails build failed with exit code $LASTEXITCODE"
+          }
+          New-Item -ItemType Directory -Force -Path "build\bin" | Out-Null
           Copy-Item -Force "pkg\vpn\wintun.dll" "build\bin\wintun.dll"
           New-Item -ItemType Directory -Force -Path "build\bin\data" | Out-Null
 

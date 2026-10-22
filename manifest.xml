@@ -2,8 +2,8 @@
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0" xmlns:asmv3="urn:schemas-microsoft-com:asm.v3">
   <assemblyIdentity
     type="win32"
-    name="com.vauth.foxyvpn.windows"
-    version="1.2.0.0"
+    name="com.mostafa5804.foxyvpn.windows"
+    version="1.0.5.0"
     processorArchitecture="amd64"
   />
   <description>FoxyVPN Windows Desktop Client (Wintun &amp; Mozilla Guardian)</description>

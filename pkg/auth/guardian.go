@@ -1528,8 +1528,26 @@ func (g *GuardianService) Logout() {
 
 	if sessTok != "" && len(sessTok) >= 32 {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if id, reqKey, _, err := deriveHawkCredentials(sessTok, "sessionToken"); err == nil {
-			_, _ = g.fxaHawkPost(ctx, "/session/destroy", map[string]interface{}{}, id, reqKey)
+		if hawkID, hawkKey, err := deriveHawkCredentials(sessTok, "sessionToken"); err == nil {
+			destroyURL := FxaAuthServer + "/session/destroy"
+			bodyJSON := []byte("{}")
+			resp, reqErr := g.doWithChallenge(ctx, func() (*http.Request, error) {
+				authHeader, hErr := hawkHeader(http.MethodPost, destroyURL, hawkID, hawkKey, string(bodyJSON))
+				if hErr != nil {
+					return nil, hErr
+				}
+				req, rErr := http.NewRequestWithContext(ctx, http.MethodPost, destroyURL, bytes.NewReader(bodyJSON))
+				if rErr != nil {
+					return nil, rErr
+				}
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("Authorization", authHeader)
+				applyMozillaHeaders(req)
+				return req, nil
+			})
+			if reqErr == nil && resp != nil && resp.Body != nil {
+				_ = resp.Body.Close()
+			}
 		}
 		cancel()
 	}

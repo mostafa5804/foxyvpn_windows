@@ -1,4 +1,4 @@
-module github.com/vauth/foxyvpn-windows
+module github.com/mostafa5804/foxyvpn_windows
 
 go 1.23
 
