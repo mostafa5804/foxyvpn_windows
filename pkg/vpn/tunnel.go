@@ -141,6 +141,9 @@ func (e *Engine) Start(ctx context.Context, cfg TunnelConfig) error {
 	e.exitInfo = ExitCheckResult{}
 	e.mu.Unlock()
 
+	// Ensure any prior Kill Switch firewall rules are cleared before dialing
+	_ = DisengageKillSwitch()
+
 	dialStart := time.Now()
 	sess, connectedHost, err := EstablishSmartH2Session(ctx, cfg, &e.txBytes, &e.rxBytes, e.log)
 	if err != nil {
@@ -157,6 +160,9 @@ func (e *Engine) Start(ctx context.Context, cfg TunnelConfig) error {
 	socksLn, err := net.Listen("tcp", cfg.SocksListen)
 	if err != nil {
 		_ = sess.Close()
+		e.mu.Lock()
+		e.session = nil
+		e.mu.Unlock()
 		return fmt.Errorf("listening on SOCKS5 %s: %w", cfg.SocksListen, err)
 	}
 	e.socksListener = socksLn
@@ -168,13 +174,17 @@ func (e *Engine) Start(ctx context.Context, cfg TunnelConfig) error {
 	if err != nil {
 		_ = socksLn.Close()
 		_ = sess.Close()
+		e.mu.Lock()
+		e.socksListener = nil
+		e.session = nil
+		e.mu.Unlock()
 		return fmt.Errorf("listening on HTTP proxy %s: %w", cfg.HttpListen, err)
 	}
 	e.httpListener = httpLn
 	go e.acceptHTTPProxyLoop(httpLn)
 	e.log("INFO", "Local HTTP CONNECT proxy listening on %s", cfg.HttpListen)
 
-	// Always enable Windows System Proxy (WinINET -> 127.0.0.1:8080) so browsers & apps tunnel traffic without routing loops
+	// Enable Windows System Proxy (WinINET -> 127.0.0.1:8080) after saving prior user proxy settings
 	if proxyErr := SetWindowsSystemProxy(cfg.HttpListen); proxyErr != nil {
 		e.log("WARN", "Setting Windows WinINET proxy warning: %v", proxyErr)
 	} else {
@@ -185,15 +195,40 @@ func (e *Engine) Start(ctx context.Context, cfg TunnelConfig) error {
 		e.log("INFO", "Initializing Wintun virtual adapter 'FoxyVPN-Adapter' (MTU %d)...", cfg.MTU)
 		wt, err := StartWintunAdapter(cfg, e)
 		if err != nil {
-			e.log("WARN", "Wintun adapter note (%v); continuing with System Proxy + SOCKS5 tunnel", err)
-		} else {
-			e.wintunAdapter = wt
-			e.log("INFO", "Wintun adapter 'FoxyVPN-Adapter' active (IP 10.0.0.2/24, DoH %s)", cfg.DohProvider)
+			e.log("ERROR", "Wintun TUN initialization failed: %v", err)
+			_ = ClearWindowsSystemProxy()
+			_ = httpLn.Close()
+			_ = socksLn.Close()
+			_ = sess.Close()
+			e.mu.Lock()
+			e.httpListener = nil
+			e.socksListener = nil
+			e.session = nil
+			e.mu.Unlock()
+			return fmt.Errorf("failed to initialize Wintun TUN adapter: %w", err)
 		}
+		e.wintunAdapter = wt
+		e.log("INFO", "Wintun adapter 'FoxyVPN-Adapter' active (IP 10.0.0.2/24, split routes 0.0.0.0/1 & 128.0.0.0/1, DoH %s)", cfg.DohProvider)
 	}
 
 	e.connectedAt = time.Now()
 	e.running.Store(true)
+
+	// Monitor unexpected HTTP/2 session drop to enforce Kill Switch when enabled
+	sess.SetOnUnexpectedDrop(func(edgeIP string) {
+		if !e.running.Swap(false) {
+			return
+		}
+		if cfg.KillSwitch {
+			e.log("ERROR", "Tunnel dropped unexpectedly while Kill Switch is enabled — blocking non-tunnel outbound traffic via Windows Firewall")
+			if ksErr := EngageKillSwitch(edgeIP); ksErr != nil {
+				e.log("ERROR", "Kill Switch firewall rule error: %v", ksErr)
+			}
+		} else {
+			e.log("WARN", "Tunnel dropped unexpectedly; restoring system network configuration")
+			_ = ClearWindowsSystemProxy()
+		}
+	})
 
 	// Perform non-fatal exit verification probe in background
 	go func() {
@@ -223,23 +258,30 @@ func (e *Engine) UpdateToken(newToken string) {
 	}
 }
 
-// Stop gracefully tears down Wintun routes, restores Windows System Proxy, and closes all HTTP/2 streams.
+// Stop gracefully tears down Wintun routes, disengages Kill Switch rules, restores Windows System Proxy, and closes all HTTP/2 streams.
 func (e *Engine) Stop() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if !e.running.Swap(false) {
+	wasRunning := e.running.Swap(false)
+	_ = DisengageKillSwitch()
+	_ = ClearWindowsSystemProxy()
+
+	if !wasRunning && e.wintunAdapter == nil && e.socksListener == nil && e.httpListener == nil && e.session == nil {
 		return nil
 	}
 	if e.stopCh != nil {
-		close(e.stopCh)
+		select {
+		case <-e.stopCh:
+		default:
+			close(e.stopCh)
+		}
 	}
 	if e.wintunAdapter != nil {
 		e.log("INFO", "Closing Wintun adapter...")
 		_ = e.wintunAdapter.Close()
 		e.wintunAdapter = nil
 	}
-	_ = ClearWindowsSystemProxy()
 	if e.socksListener != nil {
 		_ = e.socksListener.Close()
 		e.socksListener = nil
@@ -441,16 +483,18 @@ func resolveEdgeIPViaDoH(ctx context.Context, hostname string) string {
 
 // H2Session manages a persistent TLS + HTTP/2 connection to a Fastly edge server.
 type H2Session struct {
-	raw           net.Conn
-	cc            *http2.ClientConn
-	proxyHost     string
-	token         string
-	tokenMu       sync.RWMutex
-	alive         atomic.Bool
-	stopKeepAlive context.CancelFunc
-	txBytes       *atomic.Int64
-	rxBytes       *atomic.Int64
-	logFunc       func(level, format string, args ...any)
+	raw              net.Conn
+	cc               *http2.ClientConn
+	proxyHost        string
+	token            string
+	tokenMu          sync.RWMutex
+	alive            atomic.Bool
+	closedByUs       atomic.Bool
+	stopKeepAlive    context.CancelFunc
+	onUnexpectedDrop func(edgeIP string)
+	txBytes          *atomic.Int64
+	rxBytes          *atomic.Int64
+	logFunc          func(level, format string, args ...any)
 }
 
 type edgeCandidate struct {
@@ -659,6 +703,21 @@ func dialSingleH2Session(
 	return sess, nil
 }
 
+func (s *H2Session) SetOnUnexpectedDrop(fn func(edgeIP string)) {
+	s.tokenMu.Lock()
+	s.onUnexpectedDrop = fn
+	s.tokenMu.Unlock()
+}
+
+func (s *H2Session) remoteEdgeIP() string {
+	if s.raw != nil && s.raw.RemoteAddr() != nil {
+		if host, _, err := net.SplitHostPort(s.raw.RemoteAddr().String()); err == nil {
+			return host
+		}
+	}
+	return ""
+}
+
 func (s *H2Session) keepAliveLoop(ctx context.Context) {
 	ticker := time.NewTicker(keepAliveInterval)
 	defer ticker.Stop()
@@ -672,6 +731,14 @@ func (s *H2Session) keepAliveLoop(ctx context.Context) {
 			cancel()
 			if err != nil {
 				s.alive.Store(false)
+				if !s.closedByUs.Load() {
+					s.tokenMu.RLock()
+					cb := s.onUnexpectedDrop
+					s.tokenMu.RUnlock()
+					if cb != nil {
+						cb(s.remoteEdgeIP())
+					}
+				}
 				return
 			}
 		}
@@ -731,6 +798,7 @@ func (s *H2Session) OpenTunnel(authority string) (net.Conn, error) {
 }
 
 func (s *H2Session) Close() error {
+	s.closedByUs.Store(true)
 	s.alive.Store(false)
 	if s.stopKeepAlive != nil {
 		s.stopKeepAlive()

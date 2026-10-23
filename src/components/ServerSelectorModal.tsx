@@ -2,11 +2,11 @@ import React, { useState } from 'react';
 import { Search, Check, Globe, ArrowUpDown, RefreshCw, Zap, X } from 'lucide-react';
 import {
   filterAndSortServers,
-  countryCodeToFlag,
   type ServerInfo,
 } from '../utils/vpnLogic';
 import { translations, type Language } from '../utils/i18n';
 import { vpnBridge } from '../utils/wailsBridge';
+import { CountryFlag } from './CountryFlag';
 
 interface ServerSelectorModalProps {
   servers: ServerInfo[];
@@ -53,6 +53,8 @@ export const ServerSelectorModal: React.FC<ServerSelectorModalProps> = ({
   // Calculate lowest latency among non-auto servers
   const validNonAuto = localServers.filter((s) => s.id !== 'auto' && s.latencyMs > 0);
   const minLatency = validNonAuto.length > 0 ? Math.min(...validNonAuto.map((s) => s.latencyMs)) : 24;
+  const totalServerCount = validNonAuto.length;
+  const totalCountryCount = new Set(validNonAuto.map((s) => s.countryCode)).size;
 
   return (
     <div
@@ -85,7 +87,9 @@ export const ServerSelectorModal: React.FC<ServerSelectorModalProps> = ({
                 {t.selectServerTitle}
               </h2>
               <p className={`text-[10.5px] truncate leading-tight ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                {t.selectServerSubtitle}
+                {lang === 'fa'
+                  ? `${totalServerCount} سرور فعال در ${totalCountryCount} کشور · استخراج از Mozilla Remote Settings`
+                  : `${totalServerCount} Active Nodes in ${totalCountryCount} Countries · Mozilla Remote Settings`}
               </p>
             </div>
           </div>
@@ -246,9 +250,7 @@ export const ServerSelectorModal: React.FC<ServerSelectorModalProps> = ({
                   >
                     {/* Country Flag & Country Name (Clean: No address or port) */}
                     <div className="flex items-center gap-2.5 min-w-0">
-                      <span className="text-[20px] leading-none select-none shrink-0" aria-hidden="true">
-                        {countryCodeToFlag(srv.countryCode)}
-                      </span>
+                      <CountryFlag code={srv.countryCode} size={24} />
                       <div className="min-w-0 flex flex-col">
                         <div className="flex items-center gap-1.5">
                           <span className="text-[12.5px] font-semibold truncate leading-tight">

@@ -3,7 +3,7 @@
   <assemblyIdentity
     type="win32"
     name="com.mostafa5804.foxyvpn.windows"
-    version="1.0.5.0"
+    version="1.0.6.0"
     processorArchitecture="amd64"
   />
   <description>FoxyVPN Windows Desktop Client (Wintun &amp; Mozilla Guardian)</description>

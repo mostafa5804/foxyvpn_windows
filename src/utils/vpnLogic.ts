@@ -41,12 +41,30 @@ export interface ConnectionStatus {
 
 export interface ClientSettings {
   mode: 'tun' | 'proxy';
-  tlsSplitMode: 'sni' | 'first-byte' | 'off';
-  dohProvider: '1.1.1.1' | '8.8.8.8' | '9.9.9.9';
+  transportProtocol?: 'h2-connect-2499' | 'h2-tls-443' | 'masque-quic' | 'auto';
+  tlsSplitMode: 'sni' | 'first-byte' | 'record' | 'off';
+  fragmentSize?: number;
+  fragmentDelayMs?: number;
+  dohProvider: '1.1.1.1' | '8.8.8.8' | '9.9.9.9' | 'adguard';
   mtu: number;
   killSwitch: boolean;
+  blockIpv6?: boolean;
+  splitTunnelMode?: 'all' | 'include' | 'exclude';
+  splitTunnelApps?: string[];
+  localSocksPort?: number;
+  localHttpPort?: number;
+  allowLan?: boolean;
   controlPlaneProxy: string;
   edgeOverrideIp: string;
+}
+
+export interface UpdateCheckResult {
+  currentVersion: string;
+  latestVersion: string;
+  updateAvailable: boolean;
+  releaseUrl: string;
+  releaseNotes?: string;
+  publishedAt?: string;
 }
 
 export const FIFTY_GB_BYTES = 50 * 1024 * 1024 * 1024; // 53,687,091,200 bytes
@@ -330,7 +348,19 @@ export function countryCodeToFlag(countryCode: string): string {
 
 export const ACCOUNT_BIN_PATH = 'data/account.bin';
 export const ACCOUNT_BIN_MAGIC = 'FOXYBIN1';
-export const APP_VERSION = '1.0.5';
+export const APP_VERSION = '1.0.6';
+
+export function compareSemver(a: string, b: string): number {
+  const pa = a.replace(/^v/i, '').trim().split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = b.replace(/^v/i, '').trim().split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    const va = pa[i] || 0;
+    const vb = pb[i] || 0;
+    if (va > vb) return 1;
+    if (va < vb) return -1;
+  }
+  return 0;
+}
 
 export interface AccountBinarySnapshot {
   version: string;
@@ -342,6 +372,7 @@ export interface AccountBinarySnapshot {
     email: string;
     token: string;
     quotaGB: number;
+    remainingBytes?: number;
     active: boolean;
     addedAt: string;
   }>;
@@ -398,4 +429,48 @@ export function decodeAccountBinPayload(bytes: Uint8Array): AccountBinarySnapsho
     return null;
   }
 }
+
+/**
+ * Computes remaining quota bytes using the post-renewal traffic delta
+ * `(cumulativeTxRxBytes - baselineTxRxBytes)` so background ProxyPass renewals
+ * never double-deduct traffic already accounted for by the server (Issue #8).
+ */
+export function computeQuotaRemainingFromBaseline(
+  serverRemainingBytes: number,
+  cumulativeTxRxBytes: number,
+  baselineTxRxBytes: number
+): number {
+  const safeServerRem = Math.max(0, serverRemainingBytes);
+  const safeCumulative = Math.max(0, cumulativeTxRxBytes);
+  const safeBaseline = Math.max(0, baselineTxRxBytes);
+  const delta = safeCumulative >= safeBaseline ? safeCumulative - safeBaseline : safeCumulative;
+  return Math.max(0, safeServerRem - delta);
+}
+
+/**
+ * Resolves a requested server ID against the available server list.
+ * If `requestedId` is `'auto'` or not found, selects the lowest-latency server
+ * and marks `usedFallback = true` when a specific non-auto server ID was missing (Issue #6).
+ */
+export function resolveServerSelection(
+  servers: ServerInfo[],
+  requestedId: string
+): { server: ServerInfo; usedFallback: boolean } {
+  const nonAuto = servers.filter((s) => s.id !== 'auto');
+  if (requestedId && requestedId !== 'auto') {
+    const exact = nonAuto.find((s) => s.id === requestedId);
+    if (exact) {
+      return { server: exact, usedFallback: false };
+    }
+  }
+  const sorted = [...nonAuto].sort((a, b) => {
+    const la = a.latencyMs > 0 ? a.latencyMs : Number.MAX_SAFE_INTEGER;
+    const lb = b.latencyMs > 0 ? b.latencyMs : Number.MAX_SAFE_INTEGER;
+    return la - lb;
+  });
+  const best = sorted[0] || servers[0] || AUTO_SERVER;
+  const usedFallback = Boolean(requestedId && requestedId !== 'auto');
+  return { server: best, usedFallback };
+}
+
 

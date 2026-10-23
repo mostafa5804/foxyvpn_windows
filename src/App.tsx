@@ -22,11 +22,15 @@ import {
   Cpu,
   Layers,
   Sparkles,
+  RefreshCw,
+  Download,
+  AppWindow,
+  Network,
 } from 'lucide-react';
 import {
+  APP_VERSION,
   FIFTY_GB_BYTES,
   calculateQuotaSummary,
-  countryCodeToFlag,
   formatBytes,
   formatRate,
   formatUptime,
@@ -35,10 +39,24 @@ import {
   type ConnectionStatus,
   type ServerInfo,
   type UserInfo,
+  type UpdateCheckResult,
 } from './utils/vpnLogic';
 import { DEFAULT_SERVERS, vpnBridge, openExternalUrl, type PoolAccountItem } from './utils/wailsBridge';
 import { translations, type Language } from './utils/i18n';
 import { ServerSelectorModal } from './components/ServerSelectorModal';
+import { FoxyLogo } from './components/FoxyLogo';
+import { CountryFlag } from './components/CountryFlag';
+
+const COMMON_WINDOWS_APPS: { exe: string; label: string }[] = [
+  { exe: 'chrome.exe', label: 'Google Chrome' },
+  { exe: 'firefox.exe', label: 'Mozilla Firefox' },
+  { exe: 'msedge.exe', label: 'Microsoft Edge' },
+  { exe: 'Telegram.exe', label: 'Telegram Desktop' },
+  { exe: 'Discord.exe', label: 'Discord' },
+  { exe: 'Spotify.exe', label: 'Spotify' },
+  { exe: 'Code.exe', label: 'VS Code' },
+  { exe: 'steam.exe', label: 'Steam' },
+];
 
 type ActiveTab = 'dashboard' | 'account' | 'settings' | 'about';
 
@@ -90,10 +108,19 @@ export default function App() {
   // Settings state
   const [settings, setSettings] = useState<ClientSettings>({
     mode: 'tun',
+    transportProtocol: 'h2-connect-2499',
     tlsSplitMode: 'sni',
+    fragmentSize: 24,
+    fragmentDelayMs: 12,
     dohProvider: '1.1.1.1',
     mtu: 1380,
     killSwitch: true,
+    blockIpv6: true,
+    splitTunnelMode: 'all',
+    splitTunnelApps: ['chrome.exe', 'firefox.exe', 'Telegram.exe'],
+    localSocksPort: 1080,
+    localHttpPort: 8080,
+    allowLan: false,
     controlPlaneProxy: '',
     edgeOverrideIp: '',
   });
@@ -102,6 +129,10 @@ export default function App() {
   const [settingsDraft, setSettingsDraft] = useState<ClientSettings>({ ...settings });
   const [settingsSavedToast, setSettingsSavedToast] = useState(false);
   const [showLogsInSettings, setShowLogsInSettings] = useState(false);
+  const [customAppInput, setCustomAppInput] = useState('');
+  const [isRefreshingQuota, setIsRefreshingQuota] = useState(false);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+  const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null);
 
   // Connection status
   const [status, setStatus] = useState<ConnectionStatus>({
@@ -294,21 +325,44 @@ export default function App() {
   }, [status.state]);
 
   // Connect / Disconnect Handler
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+
+  const syncConnectedServer = (liveStatus: ConnectionStatus) => {
+    if (selectedServer.id !== 'auto' && liveStatus.serverId && liveStatus.serverId !== selectedServer.id) {
+      const matched = servers.find((srv) => srv.id === liveStatus.serverId);
+      if (matched) {
+        setSelectedServer(matched);
+        if (typeof window !== 'undefined' && window.localStorage) {
+          window.localStorage.setItem('foxyvpn_server_id', matched.id);
+        }
+      }
+    }
+  };
+
   const handleToggleConnection = async () => {
     if (!user) {
       // If no account, switch to Account tab so user logs in or creates account
       setActiveTab('account');
       return;
     }
+    setConnectionError(null);
     if (status.state === 'Connected' || status.state === 'Connecting...') {
       await vpnBridge.disconnect();
       const s = await vpnBridge.getStatus();
       setStatus(s);
     } else {
       setStatus((prev) => ({ ...prev, state: 'Connecting...' }));
-      await vpnBridge.connect(selectedServer.id, settings.mode);
-      const s = await vpnBridge.getStatus();
-      setStatus(s);
+      try {
+        await vpnBridge.connect(selectedServer.id, settings.mode);
+        const s = await vpnBridge.getStatus();
+        setStatus(s);
+        syncConnectedServer(s);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setConnectionError(msg);
+        const s = await vpnBridge.getStatus();
+        setStatus({ ...s, state: 'Disconnected' });
+      }
     }
     const latestLogs = await vpnBridge.getLogs();
     setLogs(latestLogs);
@@ -317,13 +371,22 @@ export default function App() {
   // Server selection
   const handleSelectServer = async (srv: ServerInfo) => {
     setSelectedServer(srv);
+    setConnectionError(null);
     if (typeof window !== 'undefined' && window.localStorage) {
       window.localStorage.setItem('foxyvpn_server_id', srv.id);
     }
     if (status.state === 'Connected') {
-      await vpnBridge.connect(srv.id, settings.mode);
-      const s = await vpnBridge.getStatus();
-      setStatus(s);
+      try {
+        await vpnBridge.connect(srv.id, settings.mode);
+        const s = await vpnBridge.getStatus();
+        setStatus(s);
+        syncConnectedServer(s);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setConnectionError(msg);
+        const s = await vpnBridge.getStatus();
+        setStatus({ ...s, state: 'Disconnected' });
+      }
       setLogs(await vpnBridge.getLogs());
     } else {
       setStatus((prev) => ({
@@ -340,12 +403,19 @@ export default function App() {
     const next: ClientSettings = { ...settings, mode: newMode };
     setSettings(next);
     setSettingsDraft((prev) => ({ ...prev, mode: newMode }));
+    setConnectionError(null);
     await vpnBridge.updateSettings(next);
     if (status.state === 'Connected') {
-      await vpnBridge.connect(selectedServer.id, newMode);
+      try {
+        await vpnBridge.connect(selectedServer.id, newMode);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setConnectionError(msg);
+      }
     }
     const s = await vpnBridge.getStatus();
     setStatus(s);
+    syncConnectedServer(s);
     setLogs(await vpnBridge.getLogs());
   };
 
@@ -557,18 +627,87 @@ export default function App() {
     setTimeout(() => setSettingsSavedToast(false), 2500);
   };
 
-  // Combined Pool Quota Calculation across all accounts
+  // Refresh real quota from Mozilla Guardian server
+  const handleRefreshQuota = async () => {
+    if (isRefreshingQuota || !user) return;
+    setIsRefreshingQuota(true);
+    try {
+      const updatedUser = await vpnBridge.refreshAccountQuota();
+      if (updatedUser) {
+        setUser(updatedUser);
+        setStatus((prev) => ({
+          ...prev,
+          quotaMaxBytes: updatedUser.quotaMaxBytes,
+          quotaRemainingBytes: updatedUser.quotaRemainingBytes,
+        }));
+      }
+      setAccountList(vpnBridge.getAccountPool());
+    } finally {
+      setIsRefreshingQuota(false);
+    }
+  };
+
+  // Check for new version on GitHub Releases
+  const handleCheckForUpdates = async () => {
+    if (isCheckingUpdate) return;
+    setIsCheckingUpdate(true);
+    try {
+      const res = await vpnBridge.checkForUpdates();
+      setUpdateResult(res);
+    } finally {
+      setIsCheckingUpdate(false);
+    }
+  };
+
+  // Toggle app in Split Tunnel list
+  const toggleSplitTunnelApp = (exeName: string) => {
+    const current = settingsDraft.splitTunnelApps || [];
+    const exists = current.some((item) => item.toLowerCase() === exeName.toLowerCase());
+    const next = exists
+      ? current.filter((item) => item.toLowerCase() !== exeName.toLowerCase())
+      : [...current, exeName];
+    setSettingsDraft({ ...settingsDraft, splitTunnelApps: next });
+  };
+
+  const handleAddCustomSplitApp = () => {
+    const trimmed = customAppInput.trim();
+    if (!trimmed) return;
+    const normalized = trimmed.toLowerCase().endsWith('.exe') ? trimmed : `${trimmed}.exe`;
+    const current = settingsDraft.splitTunnelApps || [];
+    if (!current.some((item) => item.toLowerCase() === normalized.toLowerCase())) {
+      setSettingsDraft({
+        ...settingsDraft,
+        splitTunnelApps: [...current, normalized],
+      });
+    }
+    setCustomAppInput('');
+  };
+
+  // Combined Pool Quota Calculation across all accounts (preserving real per-account remaining quota)
   const poolCount = accountList.length;
   const totalPoolQuotaGB = poolCount > 0
     ? accountList.reduce((sum, item) => sum + (item.quotaGB || 50), 0)
-    : (user ? 50 : 50);
+    : 50;
 
   const totalMaxBytes = totalPoolQuotaGB * 1024 * 1024 * 1024;
-  // Account currently connected contributes its remaining bytes; other pool accounts contribute 50 GB each
-  const otherAccountsBytes = Math.max(0, poolCount - 1) * FIFTY_GB_BYTES;
-  const totalRemainingBytes = user
-    ? Math.min(totalMaxBytes, status.quotaRemainingBytes + otherAccountsBytes)
-    : (poolCount > 0 ? totalMaxBytes : FIFTY_GB_BYTES);
+  const totalRemainingBytes = (() => {
+    if (!user && poolCount === 0) return FIFTY_GB_BYTES;
+    if (poolCount <= 1) {
+      return Math.min(totalMaxBytes, status.quotaRemainingBytes);
+    }
+    let sumRem = 0;
+    for (const acc of accountList) {
+      const isCurrentActive = user && acc.email.toLowerCase() === user.email.toLowerCase();
+      if (isCurrentActive) {
+        sumRem += status.quotaRemainingBytes;
+      } else if (typeof acc.remainingBytes === 'number' && acc.remainingBytes >= 0) {
+        sumRem += acc.remainingBytes;
+      } else {
+        sumRem += (acc.quotaGB || 50) * 1024 * 1024 * 1024;
+      }
+    }
+    return Math.min(totalMaxBytes, sumRem);
+  })();
 
   const totalUsedBytes = Math.max(0, totalMaxBytes - totalRemainingBytes);
   const totalUsedPercent = totalMaxBytes > 0 ? (totalUsedBytes / totalMaxBytes) * 100 : 0;
@@ -588,7 +727,7 @@ export default function App() {
   const handleExportAccountBin = () => {
     try {
       const bytes = vpnBridge.exportAccountBinBytes();
-      const blob = new Blob([bytes], { type: 'application/octet-stream' });
+      const blob = new Blob([new Uint8Array(bytes)], { type: 'application/octet-stream' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -649,42 +788,34 @@ export default function App() {
         }`}
         style={{ boxSizing: 'border-box', fontSize: '13px', lineHeight: 1.5 }}
       >
-        {/* Title Bar (height: 36px) */}
+        {/* Title Bar (height: 36px) — Native Windows frame handles Minimize/Close; only Logo, Title, Theme & Language here */}
         <div
-          className={`h-[36px] flex-none flex items-center justify-between ps-3 border-b transition-colors ${
+          className={`h-[36px] flex-none flex items-center justify-between px-3 border-b transition-colors ${
             isDark ? 'bg-[#0A0D11] border-[#1C222B]' : 'bg-[#FFFFFF] border-[#E5E7EB]'
           }`}
         >
           {/* Logo & App Name */}
           <div className="flex items-center gap-2">
-            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
-              <rect width="24" height="24" rx="6" fill="#1B222C"></rect>
-              <path
-                d="M5 6l4.2 3h5.6L19 6v7.5c0 3-3 5.5-7 6.5-4-1-7-3.5-7-6.5z"
-                fill="#FF7A1A"
-              ></path>
-              <path
-                d="M9 13l3 3 3-3"
-                stroke="#0E1116"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                fill="none"
-              ></path>
-            </svg>
-            <span className="font-bold text-[12px] tracking-wide">FoxyVPN</span>
+            <FoxyLogo size={22} />
+            <span className="font-bold text-[12.5px] tracking-wide">FoxyVPN</span>
+            <span
+              dir="ltr"
+              className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-[#FF7A1A]/15 text-[#FF7A1A]"
+            >
+              v{APP_VERSION}
+            </span>
           </div>
 
-          {/* Title Bar Actions: Theme Toggle, Language Toggle, Window Controls */}
-          <div className="flex items-center h-full">
+          {/* Title Bar Actions: Theme Toggle & Language Toggle only (No duplicate Minimize/Close buttons) */}
+          <div className="flex items-center gap-1 h-full">
             {/* Theme Toggle Button */}
             <button
               type="button"
               onClick={toggleTheme}
               aria-label={isDark ? t.lightTheme : t.darkTheme}
               title={isDark ? t.lightTheme : t.darkTheme}
-              className={`w-8 h-full flex items-center justify-center border-0 bg-transparent cursor-pointer transition-colors ${
-                isDark ? 'text-[#A5AFBB] hover:text-white' : 'text-[#64748B] hover:text-black'
+              className={`w-7 h-7 rounded-md flex items-center justify-center border-0 bg-transparent cursor-pointer transition-colors ${
+                isDark ? 'text-[#A5AFBB] hover:text-white hover:bg-[#1A202C]' : 'text-[#64748B] hover:text-black hover:bg-slate-100'
               }`}
             >
               {isDark ? (
@@ -700,37 +831,11 @@ export default function App() {
               onClick={toggleLanguage}
               aria-label="Switch Language"
               title="FA / EN"
-              className={`px-1.5 h-full flex items-center justify-center border-0 bg-transparent cursor-pointer font-bold text-[11px] font-mono transition-colors ${
-                isDark ? 'text-[#FF7A1A] hover:text-[#FFA04D]' : 'text-[#EA580C] hover:text-[#C2410C]'
+              className={`px-2 h-7 rounded-md flex items-center justify-center border-0 bg-transparent cursor-pointer font-bold text-[11px] transition-colors ${
+                isDark ? 'text-[#FF7A1A] hover:text-[#FFA04D] hover:bg-[#1A202C]' : 'text-[#EA580C] hover:text-[#C2410C] hover:bg-slate-100'
               }`}
             >
               {lang === 'fa' ? 'EN' : 'فا'}
-            </button>
-
-            {/* Minimize button */}
-            <button
-              type="button"
-              aria-label="Minimize"
-              className={`w-9 h-full flex items-center justify-center border-0 bg-transparent cursor-pointer transition-colors ${
-                isDark ? 'text-[#A5AFBB] hover:bg-[#1A202C]' : 'text-[#64748B] hover:bg-slate-100'
-              }`}
-            >
-              <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
-                <path d="M1 6h10" stroke="currentColor" strokeWidth="1.2"></path>
-              </svg>
-            </button>
-
-            {/* Close button */}
-            <button
-              type="button"
-              aria-label="Close"
-              className={`w-9 h-full flex items-center justify-center border-0 bg-transparent cursor-pointer transition-colors ${
-                isDark ? 'text-[#A5AFBB] hover:bg-red-900/40 hover:text-red-400' : 'text-[#64748B] hover:bg-red-50 hover:text-red-600'
-              }`}
-            >
-              <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
-                <path d="M1.5 1.5l9 9M10.5 1.5l-9 9" stroke="currentColor" strokeWidth="1.2"></path>
-              </svg>
             </button>
           </div>
         </div>
@@ -880,6 +985,25 @@ export default function App() {
                 )}
               </div>
 
+              {connectionError && (
+                <div
+                  className={`p-2.5 rounded-[10px] border text-[11.5px] flex items-start justify-between gap-2 ${
+                    isDark
+                      ? 'bg-red-950/40 border-red-800/60 text-red-300'
+                      : 'bg-red-50 border-red-200 text-red-700'
+                  }`}
+                >
+                  <span className="leading-snug">{connectionError}</span>
+                  <button
+                    type="button"
+                    onClick={() => setConnectionError(null)}
+                    className="text-[11px] font-bold opacity-75 hover:opacity-100 cursor-pointer bg-transparent border-0 text-current shrink-0"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+
               {/* Server Selector Card */}
               <button
                 type="button"
@@ -890,28 +1014,33 @@ export default function App() {
                     : 'bg-[#FFFFFF] border-[#E2E8F0] hover:border-slate-400 shadow-2xs'
                 }`}
               >
-                {/* Country Flag (or Lightning for Auto) */}
+                {/* SVG Country Flag (or Lightning for Auto) */}
                 <span
                   dir="ltr"
-                  className={`w-[36px] h-[36px] rounded-[9px] flex items-center justify-center text-[22px] leading-none select-none shrink-0 ${
+                  className={`w-[38px] h-[38px] rounded-[9px] flex items-center justify-center leading-none select-none shrink-0 ${
                     isDark ? 'bg-[#1F2733]' : 'bg-slate-100'
                   }`}
                   aria-hidden="true"
                 >
-                  {selectedServer.id === 'auto' ? '⚡' : countryCodeToFlag(selectedServer.countryCode)}
+                  <CountryFlag
+                    code={selectedServer.id === 'auto' ? 'AUTO' : selectedServer.countryCode}
+                    size={26}
+                  />
                 </span>
 
-                {/* Country Name & Clean Subtitle (No address or port) */}
+                {/* Country Name & Clean Subtitle */}
                 <span className="flex-1 min-w-0 flex flex-col">
                   <span className="font-semibold text-[13.5px] truncate">
                     {selectedServer.id === 'auto'
                       ? (lang === 'fa' ? 'سرور خودکار (بهترین پینگ)' : 'Automatic (Lowest Ping)')
-                      : (lang === 'fa' ? selectedServer.countryName : `${selectedServer.countryName}`)}
+                      : selectedServer.countryName}
                   </span>
                   <span className="text-[11px] text-[#8B96A3] truncate">
                     {selectedServer.id === 'auto'
-                      ? (lang === 'fa' ? 'انتخاب بهینه‌ترین نود' : 'Optimal Fastly Node')
-                      : selectedServer.cityName}
+                      ? (lang === 'fa'
+                          ? `انتخاب هوشمند از بین ${servers.length} سرور`
+                          : `Smart route across ${servers.length} nodes`)
+                      : `${selectedServer.cityName} · ${servers.length} ${lang === 'fa' ? 'سرور فعال' : 'nodes'}`}
                   </span>
                 </span>
 
@@ -961,19 +1090,35 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Monthly Quota Card */}
+              {/* Monthly Quota Card with Live Server Quota Sync */}
               <div
                 className={`p-[11px_14px_12px] rounded-[12px] border flex flex-col gap-2 ${
                   isDark ? 'bg-[#151A21] border-[#232A33]' : 'bg-[#FFFFFF] border-[#E2E8F0] shadow-2xs'
                 }`}
               >
-                <div className="flex items-baseline justify-between">
-                  <span className="font-semibold text-[13px]">
-                    {poolCount > 1
-                      ? lang === 'fa'
-                        ? `سهمیه کل استخر (${poolCount} اکانت)`
-                        : `Combined Quota (${poolCount} Accounts)`
-                      : t.monthlyAllowanceTitle}
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-[13px] flex items-center gap-1.5">
+                    <span>
+                      {poolCount > 1
+                        ? lang === 'fa'
+                          ? `سهمیه کل استخر (${poolCount} اکانت)`
+                          : `Combined Quota (${poolCount} Accounts)`
+                        : t.monthlyAllowanceTitle}
+                    </span>
+                    {user && (
+                      <button
+                        type="button"
+                        onClick={handleRefreshQuota}
+                        disabled={isRefreshingQuota}
+                        title={t.syncQuotaBtn}
+                        aria-label={t.syncQuotaBtn}
+                        className={`p-1 rounded-md border-0 bg-transparent cursor-pointer transition-colors ${
+                          isDark ? 'text-[#8B96A3] hover:text-[#FF7A1A]' : 'text-slate-500 hover:text-orange-600'
+                        }`}
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingQuota ? 'animate-spin text-[#FF7A1A]' : ''}`} />
+                      </button>
+                    )}
                   </span>
                   <span dir="ltr" className="font-mono text-[12px]">
                     <span className="text-[#2DD4A0] font-bold">
@@ -1001,9 +1146,13 @@ export default function App() {
                       {formatBytes(totalUsedBytes)}
                     </span>
                   </span>
-                  {poolCount > 1 && (
+                  {poolCount > 1 ? (
                     <span className="text-[#FF7A1A] font-mono text-[10.5px] font-semibold">
                       {poolCount} × 50 GB = {totalPoolQuotaGB} GB
+                    </span>
+                  ) : (
+                    <span className="text-[10.5px] text-[#2DD4A0]">
+                      {lang === 'fa' ? 'همگام با سرور موزیلا' : 'Synced with Mozilla'}
                     </span>
                   )}
                 </div>
@@ -1423,13 +1572,13 @@ export default function App() {
           )}
 
           {/* ========================================================
-              PAGE 3: تنظیمات (SETTINGS)
+              PAGE 3: تنظیمات (SETTINGS — Full Android-parity Tunnel & Protocol Controls)
               ======================================================== */}
           {activeTab === 'settings' && (
             <form onSubmit={handleSaveSettings} className="flex-1 flex flex-col gap-3">
-              {/* Routing Card */}
+              {/* 1. Routing & Transport Protocol Card */}
               <div
-                className={`p-3.5 rounded-[12px] border flex flex-col gap-3.5 ${
+                className={`p-3.5 rounded-[12px] border flex flex-col gap-3 ${
                   isDark ? 'bg-[#151A21] border-[#232A33]' : 'bg-[#FFFFFF] border-[#E2E8F0] shadow-2xs'
                 }`}
               >
@@ -1443,7 +1592,7 @@ export default function App() {
                     type="button"
                     onClick={() => setSettingsDraft({ ...settingsDraft, mode: 'tun' })}
                     aria-pressed={settingsDraft.mode === 'tun'}
-                    className={`text-start p-[11px_12px] rounded-[11px] border-[1.5px] flex flex-col gap-0.5 cursor-pointer transition-colors ${
+                    className={`text-start p-[10px_11px] rounded-[11px] border-[1.5px] flex flex-col gap-0.5 cursor-pointer transition-colors ${
                       settingsDraft.mode === 'tun'
                         ? 'border-[#FF7A1A] bg-[#241609] text-[#E8ECF1]'
                         : isDark
@@ -1452,8 +1601,8 @@ export default function App() {
                     }`}
                   >
                     <span
-                      className={`font-bold text-[13px] ${
-                        settingsDraft.mode === 'tun' ? 'text-[#FF9A4D]' : 'text-[#C5CDD6]'
+                      className={`font-bold text-[12.5px] ${
+                        settingsDraft.mode === 'tun' ? 'text-[#FF9A4D]' : isDark ? 'text-[#C5CDD6]' : 'text-slate-800'
                       }`}
                     >
                       {t.fullTunOptionTitle}
@@ -1467,7 +1616,7 @@ export default function App() {
                     type="button"
                     onClick={() => setSettingsDraft({ ...settingsDraft, mode: 'proxy' })}
                     aria-pressed={settingsDraft.mode === 'proxy'}
-                    className={`text-start p-[11px_12px] rounded-[11px] border-[1.5px] flex flex-col gap-0.5 cursor-pointer transition-colors ${
+                    className={`text-start p-[10px_11px] rounded-[11px] border-[1.5px] flex flex-col gap-0.5 cursor-pointer transition-colors ${
                       settingsDraft.mode === 'proxy'
                         ? 'border-[#FF7A1A] bg-[#241609] text-[#E8ECF1]'
                         : isDark
@@ -1476,21 +1625,51 @@ export default function App() {
                     }`}
                   >
                     <span
-                      className={`font-bold text-[13px] ${
-                        settingsDraft.mode === 'proxy' ? 'text-[#FF9A4D]' : 'text-[#C5CDD6]'
+                      className={`font-bold text-[12.5px] ${
+                        settingsDraft.mode === 'proxy' ? 'text-[#FF9A4D]' : isDark ? 'text-[#C5CDD6]' : 'text-slate-800'
                       }`}
                     >
                       {t.proxyOptionTitle}
                     </span>
                     <span dir="ltr" className="text-[10.5px] text-[#8B96A3] text-right">
-                      System Proxy (10808)
+                      SOCKS5 ({settingsDraft.localSocksPort || 1080}) / HTTP ({settingsDraft.localHttpPort || 8080})
                     </span>
                   </button>
                 </div>
 
+                {/* Transport Protocol Selection (Restored from Android / v1.0.4) */}
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="settings-protocol-select" className="text-[12px] font-semibold text-[#8B96A3]">
+                    {t.transportProtocolLabel}
+                  </label>
+                  <div className="relative">
+                    <select
+                      id="settings-protocol-select"
+                      value={settingsDraft.transportProtocol || 'h2-connect-2499'}
+                      onChange={(e) =>
+                        setSettingsDraft({
+                          ...settingsDraft,
+                          transportProtocol: e.target.value as ClientSettings['transportProtocol'],
+                        })
+                      }
+                      className={`w-full box-border h-[40px] appearance-none rounded-[10px] text-[12px] ps-3 pe-8 border transition-colors outline-none ${
+                        isDark
+                          ? 'bg-[#0E1116] border-[#2A323D] text-[#E8ECF1]'
+                          : 'bg-slate-50 border-slate-300 text-slate-900'
+                      }`}
+                    >
+                      <option value="h2-connect-2499">{t.protocolHttp2Connect}</option>
+                      <option value="h2-tls-443">{t.protocolHttp2Tls}</option>
+                      <option value="masque-quic">{t.protocolMasqueQuic}</option>
+                      <option value="auto">{t.protocolAuto}</option>
+                    </select>
+                    <ChevronNext className="absolute end-2.5 top-3 w-4 h-4 text-[#8B96A3] pointer-events-none" />
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-[1.5fr_1fr] gap-2.5">
-                  <div className="flex flex-col gap-1.5">
-                    <label htmlFor="settings-doh-select" className="text-[12px] font-semibold text-[#C5CDD6]">
+                  <div className="flex flex-col gap-1">
+                    <label htmlFor="settings-doh-select" className="text-[11.5px] font-semibold text-[#8B96A3]">
                       {t.dohLabel}
                     </label>
                     <div className="relative">
@@ -1503,7 +1682,7 @@ export default function App() {
                             dohProvider: e.target.value as ClientSettings['dohProvider'],
                           })
                         }
-                        className={`w-full box-border h-[44px] appearance-none rounded-[10px] text-[12.5px] px-3 border transition-colors outline-none ${
+                        className={`w-full box-border h-[40px] appearance-none rounded-[10px] text-[12px] ps-3 pe-8 border transition-colors outline-none ${
                           isDark
                             ? 'bg-[#0E1116] border-[#2A323D] text-[#E8ECF1]'
                             : 'bg-slate-50 border-slate-300 text-slate-900'
@@ -1513,12 +1692,12 @@ export default function App() {
                         <option value="9.9.9.9">Quad9 · 9.9.9.9</option>
                         <option value="8.8.8.8">Google · 8.8.8.8</option>
                       </select>
-                      <ChevronNext className="absolute start-3 top-3.5 w-4 h-4 text-[#8B96A3] pointer-events-none" />
+                      <ChevronNext className="absolute end-2.5 top-3 w-4 h-4 text-[#8B96A3] pointer-events-none" />
                     </div>
                   </div>
 
-                  <div className="flex flex-col gap-1.5">
-                    <label htmlFor="settings-mtu-input" className="text-[12px] font-semibold text-[#C5CDD6]">
+                  <div className="flex flex-col gap-1">
+                    <label htmlFor="settings-mtu-input" className="text-[11.5px] font-semibold text-[#8B96A3]">
                       MTU
                     </label>
                     <input
@@ -1533,7 +1712,7 @@ export default function App() {
                           mtu: Number(e.target.value) || 1380,
                         })
                       }
-                      className={`w-full box-border h-[44px] rounded-[10px] font-mono text-[13px] px-3 border transition-colors outline-none ${
+                      className={`w-full box-border h-[40px] rounded-[10px] font-mono text-[12.5px] px-3 border transition-colors outline-none ${
                         isDark
                           ? 'bg-[#0E1116] border-[#2A323D] text-[#E8ECF1]'
                           : 'bg-slate-50 border-slate-300 text-slate-900'
@@ -1543,9 +1722,234 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Anti-DPI Card */}
+              {/* 2. Per-App Split Tunneling Card (Restored Android Feature) */}
               <div
-                className={`p-3.5 rounded-[12px] border flex flex-col gap-3.5 ${
+                className={`p-3.5 rounded-[12px] border flex flex-col gap-3 ${
+                  isDark ? 'bg-[#151A21] border-[#232A33]' : 'bg-[#FFFFFF] border-[#E2E8F0] shadow-2xs'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 font-bold text-[13px]">
+                    <AppWindow className="w-4 h-4 text-[#6FD6F0]" />
+                    <span>{t.splitTunnelTitle}</span>
+                  </div>
+                  <span className="text-[11px] text-[#2DD4A0] font-semibold">
+                    {(settingsDraft.splitTunnelApps || []).length}{' '}
+                    {lang === 'fa' ? 'برنامه' : 'apps'}
+                  </span>
+                </div>
+
+                {/* Split Tunnel Mode 3-way selector */}
+                <div
+                  className={`grid grid-cols-3 gap-1 p-1 rounded-[10px] border ${
+                    isDark ? 'bg-[#0E1116] border-[#232A33]' : 'bg-slate-100 border-slate-200'
+                  }`}
+                >
+                  {(
+                    [
+                      { id: 'all', label: t.splitModeAll },
+                      { id: 'include', label: t.splitModeInclude },
+                      { id: 'exclude', label: t.splitModeExclude },
+                    ] as const
+                  ).map((modeOpt) => {
+                    const active = (settingsDraft.splitTunnelMode || 'all') === modeOpt.id;
+                    return (
+                      <button
+                        key={modeOpt.id}
+                        type="button"
+                        onClick={() =>
+                          setSettingsDraft({ ...settingsDraft, splitTunnelMode: modeOpt.id })
+                        }
+                        className={`h-[32px] rounded-[7px] border-0 text-[11px] font-bold cursor-pointer transition-colors px-1 truncate ${
+                          active
+                            ? 'bg-[#FF7A1A] text-[#1A0F05]'
+                            : isDark
+                            ? 'bg-transparent text-[#A5AFBB] hover:text-white'
+                            : 'bg-transparent text-slate-600 hover:text-black'
+                        }`}
+                      >
+                        {modeOpt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {(settingsDraft.splitTunnelMode === 'include' ||
+                  settingsDraft.splitTunnelMode === 'exclude') && (
+                  <div className="flex flex-col gap-2">
+                    <span className="text-[11px] text-[#8B96A3]">{t.splitTunnelDesc}</span>
+
+                    {/* Quick Checkboxes for Popular Windows Apps */}
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {COMMON_WINDOWS_APPS.map((appItem) => {
+                        const checked = (settingsDraft.splitTunnelApps || []).some(
+                          (x) => x.toLowerCase() === appItem.exe.toLowerCase()
+                        );
+                        return (
+                          <button
+                            key={appItem.exe}
+                            type="button"
+                            onClick={() => toggleSplitTunnelApp(appItem.exe)}
+                            className={`flex items-center justify-between px-2.5 py-1.5 rounded-[8px] border text-[11px] cursor-pointer transition-colors ${
+                              checked
+                                ? 'border-[#FF7A1A] bg-[#FF7A1A]/15 text-[#FF9A4D] font-bold'
+                                : isDark
+                                ? 'border-[#2A323D] bg-[#0E1116] text-[#A5AFBB]'
+                                : 'border-slate-200 bg-slate-50 text-slate-700'
+                            }`}
+                          >
+                            <span className="truncate">{appItem.label}</span>
+                            {checked ? (
+                              <Check className="w-3.5 h-3.5 text-[#FF7A1A] shrink-0" strokeWidth={2.5} />
+                            ) : (
+                              <Plus className="w-3.5 h-3.5 opacity-60 shrink-0" />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Add Custom .exe Process */}
+                    <div className="flex gap-1.5">
+                      <input
+                        type="text"
+                        dir="ltr"
+                        value={customAppInput}
+                        onChange={(e) => setCustomAppInput(e.target.value)}
+                        placeholder={t.splitTunnelAppsPlaceholder}
+                        className={`flex-1 h-[36px] rounded-[8px] text-[11.5px] px-2.5 border outline-none ${
+                          isDark
+                            ? 'bg-[#0E1116] border-[#2A323D] text-[#E8ECF1]'
+                            : 'bg-slate-50 border-slate-300 text-slate-900'
+                        }`}
+                      />
+                      <button
+                        type="button"
+                        onClick={handleAddCustomSplitApp}
+                        className="px-3 h-[36px] rounded-[8px] border-0 bg-[#FF7A1A] text-[#1A0F05] font-bold text-[11.5px] cursor-pointer"
+                      >
+                        {t.addAppBtn}
+                      </button>
+                    </div>
+
+                    {/* Active App Chips */}
+                    {(settingsDraft.splitTunnelApps || []).length > 0 && (
+                      <div dir="ltr" className="flex flex-wrap gap-1 pt-0.5">
+                        {(settingsDraft.splitTunnelApps || []).map((exe) => (
+                          <span
+                            key={exe}
+                            onClick={() => toggleSplitTunnelApp(exe)}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10.5px] bg-[#2DD4A0]/15 text-[#2DD4A0] border border-[#2DD4A0]/30 cursor-pointer"
+                          >
+                            <span>{exe}</span>
+                            <span className="text-[10px] opacity-80">✕</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* 3. Local Proxy Ports & LAN Sharing Card */}
+              <div
+                className={`p-3.5 rounded-[12px] border flex flex-col gap-3 ${
+                  isDark ? 'bg-[#151A21] border-[#232A33]' : 'bg-[#FFFFFF] border-[#E2E8F0] shadow-2xs'
+                }`}
+              >
+                <div className="flex items-center gap-2 font-bold text-[13px]">
+                  <Network className="w-4 h-4 text-[#FF9A4D]" />
+                  <span>{t.localPortsTitle}</span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div className="flex flex-col gap-1">
+                    <label htmlFor="settings-socks-port" className="text-[11.5px] font-semibold text-[#8B96A3]">
+                      {t.socksPortLabel}
+                    </label>
+                    <input
+                      id="settings-socks-port"
+                      type="text"
+                      inputMode="numeric"
+                      dir="ltr"
+                      value={settingsDraft.localSocksPort || 1080}
+                      onChange={(e) =>
+                        setSettingsDraft({
+                          ...settingsDraft,
+                          localSocksPort: Number(e.target.value) || 1080,
+                        })
+                      }
+                      className={`w-full box-border h-[38px] rounded-[9px] text-[12px] px-3 border outline-none ${
+                        isDark
+                          ? 'bg-[#0E1116] border-[#2A323D] text-[#E8ECF1]'
+                          : 'bg-slate-50 border-slate-300 text-slate-900'
+                      }`}
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label htmlFor="settings-http-port" className="text-[11.5px] font-semibold text-[#8B96A3]">
+                      {t.httpPortLabel}
+                    </label>
+                    <input
+                      id="settings-http-port"
+                      type="text"
+                      inputMode="numeric"
+                      dir="ltr"
+                      value={settingsDraft.localHttpPort || 8080}
+                      onChange={(e) =>
+                        setSettingsDraft({
+                          ...settingsDraft,
+                          localHttpPort: Number(e.target.value) || 8080,
+                        })
+                      }
+                      className={`w-full box-border h-[38px] rounded-[9px] text-[12px] px-3 border outline-none ${
+                        isDark
+                          ? 'bg-[#0E1116] border-[#2A323D] text-[#E8ECF1]'
+                          : 'bg-slate-50 border-slate-300 text-slate-900'
+                      }`}
+                    />
+                  </div>
+                </div>
+
+                <div
+                  className={`flex items-center justify-between gap-3 p-[9px_12px] rounded-[10px] border ${
+                    isDark ? 'bg-[#0E1116] border-[#2A323D]' : 'bg-slate-50 border-slate-200'
+                  }`}
+                >
+                  <span className="flex flex-col min-w-0">
+                    <span className="font-semibold text-[12.5px]">{t.allowLanLabel}</span>
+                    <span className="text-[10.5px] text-[#8B96A3]">{t.allowLanDesc}</span>
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={Boolean(settingsDraft.allowLan)}
+                    onClick={() =>
+                      setSettingsDraft({ ...settingsDraft, allowLan: !settingsDraft.allowLan })
+                    }
+                    className="w-[44px] h-[36px] border-0 bg-transparent p-0 flex items-center justify-center shrink-0 cursor-pointer"
+                  >
+                    <span
+                      className={`w-[40px] h-[22px] rounded-[11px] relative block transition-colors ${
+                        settingsDraft.allowLan ? 'bg-[#FF7A1A]' : 'bg-[#2A323D]'
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-[2px] w-[18px] h-[18px] rounded-full transition-all ${
+                          settingsDraft.allowLan
+                            ? 'right-[2px] bg-[#1A0F05]'
+                            : 'left-[2px] bg-[#A5AFBB]'
+                        }`}
+                      ></span>
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              {/* 4. Anti-DPI & Firewall Security Card */}
+              <div
+                className={`p-3.5 rounded-[12px] border flex flex-col gap-3 ${
                   isDark ? 'bg-[#151A21] border-[#232A33]' : 'bg-[#FFFFFF] border-[#E2E8F0] shadow-2xs'
                 }`}
               >
@@ -1554,8 +1958,8 @@ export default function App() {
                   <span>{t.antiDpiFeatureTitle}</span>
                 </div>
 
-                <div className="flex flex-col gap-1.5">
-                  <label htmlFor="settings-tls-select" className="text-[12px] font-semibold text-[#C5CDD6]">
+                <div className="flex flex-col gap-1">
+                  <label htmlFor="settings-tls-select" className="text-[11.5px] font-semibold text-[#8B96A3]">
                     {t.tlsSplitLabel}
                   </label>
                   <div className="relative">
@@ -1568,27 +1972,87 @@ export default function App() {
                           tlsSplitMode: e.target.value as ClientSettings['tlsSplitMode'],
                         })
                       }
-                      className={`w-full box-border h-[44px] appearance-none rounded-[10px] text-[12.5px] px-3 border transition-colors outline-none ${
+                      className={`w-full box-border h-[40px] appearance-none rounded-[10px] text-[12px] ps-3 pe-8 border transition-colors outline-none ${
                         isDark
                           ? 'bg-[#0E1116] border-[#2A323D] text-[#E8ECF1]'
                           : 'bg-slate-50 border-slate-300 text-slate-900'
                       }`}
                     >
-                      <option value="sni">{lang === 'fa' ? 'شکستن در SNI (پیشنهادی)' : 'Split at SNI (Recommended)'}</option>
+                      <option value="sni">
+                        {lang === 'fa' ? 'شکستن هوشمند در SNI (پیشنهادی)' : 'Split at SNI (Recommended)'}
+                      </option>
+                      <option value="first-byte">
+                        {lang === 'fa' ? 'شکستن بایت اول (First-Byte Split)' : 'First-Byte Split'}
+                      </option>
+                      <option value="record">
+                        {lang === 'fa' ? 'تکه‌تکه کردن رکورد TLS (Multi-Record)' : 'Multi-Record TLS Fragmentation'}
+                      </option>
                       <option value="off">{lang === 'fa' ? 'خاموش' : 'Disabled'}</option>
                     </select>
-                    <ChevronNext className="absolute start-3 top-3.5 w-4 h-4 text-[#8B96A3] pointer-events-none" />
+                    <ChevronNext className="absolute end-2.5 top-3 w-4 h-4 text-[#8B96A3] pointer-events-none" />
                   </div>
                 </div>
 
+                {settingsDraft.tlsSplitMode !== 'off' && (
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div className="flex flex-col gap-1">
+                      <label htmlFor="settings-frag-size" className="text-[11px] font-semibold text-[#8B96A3]">
+                        {t.fragmentSizeLabel}
+                      </label>
+                      <input
+                        id="settings-frag-size"
+                        type="text"
+                        inputMode="numeric"
+                        dir="ltr"
+                        value={settingsDraft.fragmentSize || 24}
+                        onChange={(e) =>
+                          setSettingsDraft({
+                            ...settingsDraft,
+                            fragmentSize: Number(e.target.value) || 24,
+                          })
+                        }
+                        className={`w-full box-border h-[36px] rounded-[8px] text-[12px] px-2.5 border outline-none ${
+                          isDark
+                            ? 'bg-[#0E1116] border-[#2A323D] text-[#E8ECF1]'
+                            : 'bg-slate-50 border-slate-300 text-slate-900'
+                        }`}
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label htmlFor="settings-frag-delay" className="text-[11px] font-semibold text-[#8B96A3]">
+                        {t.fragmentDelayLabel}
+                      </label>
+                      <input
+                        id="settings-frag-delay"
+                        type="text"
+                        inputMode="numeric"
+                        dir="ltr"
+                        value={settingsDraft.fragmentDelayMs ?? 12}
+                        onChange={(e) =>
+                          setSettingsDraft({
+                            ...settingsDraft,
+                            fragmentDelayMs: Number(e.target.value) || 0,
+                          })
+                        }
+                        className={`w-full box-border h-[36px] rounded-[8px] text-[12px] px-2.5 border outline-none ${
+                          isDark
+                            ? 'bg-[#0E1116] border-[#2A323D] text-[#E8ECF1]'
+                            : 'bg-slate-50 border-slate-300 text-slate-900'
+                        }`}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Kill Switch Toggle */}
                 <div
-                  className={`flex items-center justify-between gap-3 p-[10px_12px] rounded-[11px] border ${
+                  className={`flex items-center justify-between gap-3 p-[9px_12px] rounded-[10px] border ${
                     isDark ? 'bg-[#0E1116] border-[#2A323D]' : 'bg-slate-50 border-slate-200'
                   }`}
                 >
                   <span className="flex flex-col min-w-0">
-                    <span className="font-semibold text-[13px]">Kill Switch</span>
-                    <span className="text-[11px] text-[#8B96A3]">{t.killSwitchDesc}</span>
+                    <span className="font-semibold text-[12.5px]">Kill Switch</span>
+                    <span className="text-[10.5px] text-[#8B96A3]">{t.killSwitchDesc}</span>
                   </span>
 
                   <button
@@ -1601,18 +2065,57 @@ export default function App() {
                         killSwitch: !settingsDraft.killSwitch,
                       })
                     }
-                    className="w-[46px] h-[44px] border-0 bg-transparent p-0 flex items-center justify-center shrink-0 cursor-pointer"
+                    className="w-[44px] h-[36px] border-0 bg-transparent p-0 flex items-center justify-center shrink-0 cursor-pointer"
                   >
                     <span
-                      className={`w-[42px] h-[24px] rounded-[12px] relative block transition-colors ${
+                      className={`w-[40px] h-[22px] rounded-[11px] relative block transition-colors ${
                         settingsDraft.killSwitch ? 'bg-[#FF7A1A]' : 'bg-[#2A323D]'
                       }`}
                     >
                       <span
-                        className={`absolute top-[3px] w-[18px] h-[18px] rounded-full transition-all ${
+                        className={`absolute top-[2px] w-[18px] h-[18px] rounded-full transition-all ${
                           settingsDraft.killSwitch
-                            ? 'right-[3px] bg-[#1A0F05]'
-                            : 'left-[3px] bg-[#A5AFBB]'
+                            ? 'right-[2px] bg-[#1A0F05]'
+                            : 'left-[2px] bg-[#A5AFBB]'
+                        }`}
+                      ></span>
+                    </span>
+                  </button>
+                </div>
+
+                {/* Block IPv6 Leak Toggle */}
+                <div
+                  className={`flex items-center justify-between gap-3 p-[9px_12px] rounded-[10px] border ${
+                    isDark ? 'bg-[#0E1116] border-[#2A323D]' : 'bg-slate-50 border-slate-200'
+                  }`}
+                >
+                  <span className="flex flex-col min-w-0">
+                    <span className="font-semibold text-[12.5px]">{t.blockIpv6Label}</span>
+                    <span className="text-[10.5px] text-[#8B96A3]">{t.blockIpv6Desc}</span>
+                  </span>
+
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={settingsDraft.blockIpv6 !== false}
+                    onClick={() =>
+                      setSettingsDraft({
+                        ...settingsDraft,
+                        blockIpv6: settingsDraft.blockIpv6 === false ? true : false,
+                      })
+                    }
+                    className="w-[44px] h-[36px] border-0 bg-transparent p-0 flex items-center justify-center shrink-0 cursor-pointer"
+                  >
+                    <span
+                      className={`w-[40px] h-[22px] rounded-[11px] relative block transition-colors ${
+                        settingsDraft.blockIpv6 !== false ? 'bg-[#FF7A1A]' : 'bg-[#2A323D]'
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-[2px] w-[18px] h-[18px] rounded-full transition-all ${
+                          settingsDraft.blockIpv6 !== false
+                            ? 'right-[2px] bg-[#1A0F05]'
+                            : 'left-[2px] bg-[#A5AFBB]'
                         }`}
                       ></span>
                     </span>
@@ -1620,9 +2123,9 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Advanced Card */}
+              {/* 5. Advanced Card */}
               <div
-                className={`p-3.5 rounded-[12px] border flex flex-col gap-3.5 ${
+                className={`p-3.5 rounded-[12px] border flex flex-col gap-3 ${
                   isDark ? 'bg-[#151A21] border-[#232A33]' : 'bg-[#FFFFFF] border-[#E2E8F0] shadow-2xs'
                 }`}
               >
@@ -1634,8 +2137,8 @@ export default function App() {
                   </span>
                 </div>
 
-                <div className="flex flex-col gap-1.5">
-                  <label htmlFor="settings-fxa-proxy" className="text-[12px] font-semibold text-[#C5CDD6]">
+                <div className="flex flex-col gap-1">
+                  <label htmlFor="settings-fxa-proxy" className="text-[11.5px] font-semibold text-[#8B96A3]">
                     {t.controlProxyLabel}
                   </label>
                   <input
@@ -1650,7 +2153,7 @@ export default function App() {
                       })
                     }
                     placeholder="socks5://127.0.0.1:10808"
-                    className={`w-full box-border h-[44px] rounded-[10px] font-mono text-[12px] px-3 border transition-colors outline-none ${
+                    className={`w-full box-border h-[38px] rounded-[9px] text-[12px] px-3 border transition-colors outline-none ${
                       isDark
                         ? 'bg-[#0E1116] border-[#2A323D] text-[#E8ECF1]'
                         : 'bg-slate-50 border-slate-300 text-slate-900'
@@ -1658,8 +2161,8 @@ export default function App() {
                   />
                 </div>
 
-                <div className="flex flex-col gap-1.5">
-                  <label htmlFor="settings-edge-ip" className="text-[12px] font-semibold text-[#C5CDD6]">
+                <div className="flex flex-col gap-1">
+                  <label htmlFor="settings-edge-ip" className="text-[11.5px] font-semibold text-[#8B96A3]">
                     {t.edgeOverrideLabel}
                   </label>
                   <input
@@ -1673,8 +2176,8 @@ export default function App() {
                         edgeOverrideIp: e.target.value,
                       })
                     }
-                    placeholder="23.235.42.8"
-                    className={`w-full box-border h-[44px] rounded-[10px] font-mono text-[12px] px-3 border transition-colors outline-none ${
+                    placeholder="151.101.1.91"
+                    className={`w-full box-border h-[38px] rounded-[9px] text-[12px] px-3 border transition-colors outline-none ${
                       isDark
                         ? 'bg-[#0E1116] border-[#2A323D] text-[#E8ECF1]'
                         : 'bg-slate-50 border-slate-300 text-slate-900'
@@ -1683,7 +2186,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Collapsible Logs Section with Copy button (as previously requested!) */}
+              {/* Collapsible Logs Section with Copy button */}
               <div
                 className={`rounded-[12px] border overflow-hidden transition-all ${
                   isDark ? 'bg-[#151A21] border-[#232A33]' : 'bg-[#FFFFFF] border-[#E2E8F0] shadow-2xs'
@@ -1704,7 +2207,7 @@ export default function App() {
                         e.stopPropagation();
                         handleCopyLogs();
                       }}
-                      className="px-2 py-1 rounded bg-[#FF7A1A]/15 text-[#FF7A1A] font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+                      className="px-2 py-1 rounded bg-[#FF7A1A]/15 text-[#FF7A1A] font-bold text-[11px] flex items-center gap-1 cursor-pointer border-0"
                     >
                       {copiedLogs ? <Check className="w-3 h-3 text-[#2DD4A0]" /> : <Copy className="w-3 h-3" />}
                       <span>{copiedLogs ? t.logsCopied : t.copyLogs}</span>
@@ -1718,7 +2221,7 @@ export default function App() {
                 {showLogsInSettings && (
                   <div
                     dir="ltr"
-                    className="p-3 pt-0 max-h-40 overflow-y-auto font-mono text-[10px] text-[#8B96A3] space-y-1 bg-[#0A0D11]"
+                    className="p-3 pt-0 max-h-40 overflow-y-auto text-[10.5px] text-[#8B96A3] space-y-1 bg-[#0A0D11]"
                   >
                     {logs.map((l, i) => (
                       <div key={i}>{l}</div>
@@ -1736,7 +2239,7 @@ export default function App() {
               {/* Save & Apply Button */}
               <button
                 type="submit"
-                className="shrink-0 h-[48px] border-0 rounded-[11px] bg-[#FF7A1A] hover:bg-[#FFA04D] text-[#1A0F05] font-bold text-[14px] flex items-center justify-center gap-2 cursor-pointer transition-colors shadow-lg active:scale-[0.98]"
+                className="shrink-0 h-[46px] border-0 rounded-[11px] bg-[#FF7A1A] hover:bg-[#FFA04D] text-[#1A0F05] font-bold text-[13.5px] flex items-center justify-center gap-2 cursor-pointer transition-colors shadow-lg active:scale-[0.98]"
               >
                 <Check className="w-[17px] h-[17px]" strokeWidth={2.4} />
                 <span>{t.saveSettingsBtn}</span>
@@ -1745,50 +2248,35 @@ export default function App() {
           )}
 
           {/* ========================================================
-              PAGE 4: درباره (ABOUT)
+              PAGE 4: درباره (ABOUT — Sleek Logo, Concise Summary & Live Update Check)
               ======================================================== */}
           {activeTab === 'about' && (
             <>
               {/* Hero Card */}
               <div
-                className={`p-[22px_16px_16px] rounded-[14px] border flex flex-col items-center gap-2.5 text-center ${
+                className={`p-[18px_16px_16px] rounded-[14px] border flex flex-col items-center gap-2 text-center ${
                   isDark ? 'bg-[#151A21] border-[#232A33]' : 'bg-[#FFFFFF] border-[#E2E8F0] shadow-2xs'
                 }`}
               >
                 <div
-                  className="w-[84px] h-[84px] rounded-[22px] flex items-center justify-center border"
+                  className="w-[78px] h-[78px] rounded-[20px] flex items-center justify-center border"
                   style={{
                     background: '#0E1116',
                     borderColor: '#2A323D',
-                    boxShadow: '0 0 44px rgba(255,122,26,.18)',
+                    boxShadow: '0 0 36px rgba(255,122,26,.22)',
                   }}
                 >
-                  <svg width="52" height="52" viewBox="0 0 24 24" aria-hidden="true">
-                    <path
-                      d="M3.5 3.5l5.2 3.6h6.6l5.2-3.6v10c0 3.8-3.7 6.6-8.5 7.8-4.8-1.2-8.5-4-8.5-7.8z"
-                      fill="#FF7A1A"
-                    ></path>
-                    <path
-                      d="M8.5 13.2l3.5 3.6 3.5-3.6"
-                      stroke="#0E1116"
-                      strokeWidth="1.9"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      fill="none"
-                    ></path>
-                    <circle cx="9" cy="10.4" r="1" fill="#0E1116"></circle>
-                    <circle cx="15" cy="10.4" r="1" fill="#0E1116"></circle>
-                  </svg>
+                  <FoxyLogo size={58} />
                 </div>
 
-                <span className="text-[21px] font-bold tracking-tight">FoxyVPN Windows</span>
+                <span className="text-[19px] font-bold tracking-tight">FoxyVPN Windows</span>
 
                 <div className="flex gap-2 items-center">
                   <span
                     dir="ltr"
-                    className="font-mono text-[11px] font-bold text-[#FF9A4D] bg-[#241609] border border-[#6B3A12] rounded-[20px] px-2.5 py-0.5"
+                    className="text-[11px] font-bold text-[#FF9A4D] bg-[#241609] border border-[#6B3A12] rounded-[20px] px-2.5 py-0.5"
                   >
-                    v1.0.5
+                    v{APP_VERSION}
                   </span>
                   <span
                     dir="ltr"
@@ -1798,163 +2286,159 @@ export default function App() {
                   </span>
                 </div>
 
-                <span className="text-[12.5px] text-[#A5AFBB] max-w-[260px] leading-relaxed">
-                  {lang === 'fa'
-                    ? '۵۰ گیگ ترافیک رایگان ماهانه موزیلا، روی ویندوز'
-                    : '50 GB monthly free Mozilla allowance on Windows'}
+                <span className="text-[12px] text-[#8B96A3] max-w-[270px] leading-relaxed">
+                  {t.aboutSummary}
                 </span>
 
-                <div className="flex flex-col gap-2 w-full mt-1">
-                  <button
-                    type="button"
-                    onClick={() => openExternalUrl('https://github.com/mostafa5804/foxyvpn_windows/releases')}
-                    className="h-[44px] border-0 rounded-[10px] bg-[#FF7A1A] hover:bg-[#FFA04D] text-[#1A0F05] font-bold text-[13.5px] flex items-center justify-center gap-2 cursor-pointer transition-colors shadow-sm"
-                  >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="M12 4v11M7 11l5 5 5-5M5 20h14"></path>
-                    </svg>
-                    <span>{t.githubReleasesBtn}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => openExternalUrl('https://github.com/mostafa5804/foxyvpn_windows')}
-                    className={`h-[44px] rounded-[10px] border font-semibold text-[13.5px] flex items-center justify-center gap-2 cursor-pointer transition-colors ${
-                      isDark
-                        ? 'border-[#2A323D] bg-transparent text-[#E8ECF1] hover:bg-slate-800/40'
-                        : 'border-slate-300 bg-white text-slate-800 hover:bg-slate-100'
+                {/* Check for Updates Status Banner */}
+                {updateResult && (
+                  <div
+                    className={`w-full p-2.5 rounded-[10px] border text-[11.5px] flex flex-col gap-1.5 ${
+                      updateResult.updateAvailable
+                        ? 'bg-[#FF7A1A]/15 border-[#FF7A1A]/40 text-[#FF9A4D]'
+                        : 'bg-emerald-500/10 border-emerald-500/30 text-[#2DD4A0]'
                     }`}
                   >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16"></path>
-                    </svg>
-                    <span>{t.githubRepoBtn}</span>
+                    <div className="flex items-center justify-between font-bold">
+                      <span>
+                        {updateResult.updateAvailable
+                          ? `${t.updateAvailableTitle}: v${updateResult.latestVersion}`
+                          : `${t.upToDateNotice} (v${APP_VERSION})`}
+                      </span>
+                      {updateResult.updateAvailable && (
+                        <button
+                          type="button"
+                          onClick={() => openExternalUrl(updateResult.releaseUrl)}
+                          className="px-2.5 py-1 rounded-md bg-[#FF7A1A] text-[#1A0F05] text-[11px] font-bold border-0 cursor-pointer flex items-center gap-1"
+                        >
+                          <Download className="w-3 h-3" />
+                          <span>{t.downloadUpdateBtn}</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex flex-col gap-2 w-full mt-1">
+                  {/* Live Check for New Version Button */}
+                  <button
+                    type="button"
+                    onClick={handleCheckForUpdates}
+                    disabled={isCheckingUpdate}
+                    className="h-[42px] border-0 rounded-[10px] bg-[#FF7A1A] hover:bg-[#FFA04D] text-[#1A0F05] font-bold text-[13px] flex items-center justify-center gap-2 cursor-pointer transition-colors shadow-sm disabled:opacity-60"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${isCheckingUpdate ? 'animate-spin' : ''}`} />
+                    <span>{isCheckingUpdate ? t.checkingUpdates : t.checkForUpdatesBtn}</span>
                   </button>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => openExternalUrl('https://github.com/mostafa5804/foxyvpn_windows/releases')}
+                      className={`h-[38px] rounded-[9px] border font-semibold text-[12px] flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                        isDark
+                          ? 'border-[#2A323D] bg-[#0E1116] text-[#E8ECF1] hover:bg-slate-800/40'
+                          : 'border-slate-300 bg-slate-50 text-slate-800 hover:bg-slate-100'
+                      }`}
+                    >
+                      <Download className="w-3.5 h-3.5 text-[#FF7A1A]" />
+                      <span>{t.githubReleasesBtn}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => openExternalUrl('https://github.com/mostafa5804/foxyvpn_windows')}
+                      className={`h-[38px] rounded-[9px] border font-semibold text-[12px] flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                        isDark
+                          ? 'border-[#2A323D] bg-[#0E1116] text-[#E8ECF1] hover:bg-slate-800/40'
+                          : 'border-slate-300 bg-slate-50 text-slate-800 hover:bg-slate-100'
+                      }`}
+                    >
+                      <ExternalLink className="w-3.5 h-3.5 text-[#2DD4A0]" />
+                      <span>{t.githubRepoBtn}</span>
+                    </button>
+                  </div>
                 </div>
               </div>
 
-              {/* Features List Card */}
-              <div
-                className={`rounded-[14px] border flex flex-col ${
-                  isDark ? 'bg-[#151A21] border-[#232A33]' : 'bg-[#FFFFFF] border-[#E2E8F0] shadow-2xs'
-                }`}
-              >
-                <div className="flex items-center gap-3 p-[11px_14px]">
-                  <span
-                    className="w-[34px] h-[34px] rounded-[9px] flex items-center justify-center shrink-0"
-                    style={{ background: '#241609' }}
-                  >
-                    <Zap className="w-[17px] h-[17px] text-[#FF9A4D]" />
-                  </span>
-                  <span className="flex flex-col">
-                    <span className="font-semibold text-[13px]">{t.quotaFeatureTitle}</span>
-                    <span className="text-[11.5px] text-[#8B96A3]">{t.quotaFeatureDesc}</span>
-                  </span>
-                </div>
-
-                <div className="h-[1px] bg-[#232A33] mx-3.5"></div>
-
-                <div className="flex items-center gap-3 p-[11px_14px]">
-                  <span
-                    className="w-[34px] h-[34px] rounded-[9px] flex items-center justify-center shrink-0"
-                    style={{ background: '#0F2530' }}
-                  >
-                    <Cpu className="w-[17px] h-[17px] text-[#6FD6F0]" />
-                  </span>
-                  <span className="flex flex-col">
-                    <span dir="ltr" className="font-semibold text-[13px] text-right">
-                      Wintun + System Proxy
-                    </span>
-                    <span className="text-[11.5px] text-[#8B96A3]">{t.driverFeatureDesc}</span>
-                  </span>
-                </div>
-
-                <div className="h-[1px] bg-[#232A33] mx-3.5"></div>
-
-                <div className="flex items-center gap-3 p-[11px_14px]">
-                  <span
-                    className="w-[34px] h-[34px] rounded-[9px] flex items-center justify-center shrink-0"
-                    style={{ background: '#10261F' }}
-                  >
-                    <ShieldCheck className="w-[17px] h-[17px] text-[#2DD4A0]" />
-                  </span>
-                  <span className="flex flex-col">
-                    <span dir="ltr" className="font-semibold text-[13px] text-right">
-                      TLS SNI Split
-                    </span>
-                    <span className="text-[11.5px] text-[#8B96A3]">{t.antiDpiFeatureDesc}</span>
-                  </span>
-                </div>
-
-                <div className="h-[1px] bg-[#232A33] mx-3.5"></div>
-
-                <div className="flex items-center gap-3 p-[11px_14px]">
-                  <span
-                    className="w-[34px] h-[34px] rounded-[9px] flex items-center justify-center shrink-0"
-                    style={{ background: '#221A33' }}
-                  >
-                    <Globe className="w-[17px] h-[17px] text-[#B79CF7]" />
-                  </span>
-                  <span className="flex flex-col">
-                    <span dir="ltr" className="font-semibold text-[13px] text-right">
-                      DNS over HTTPS
-                    </span>
-                    <span className="text-[11.5px] text-[#8B96A3]">{t.dohFeatureDesc}</span>
-                  </span>
-                </div>
-              </div>
-
-              {/* Specs Grid */}
+              {/* Compact Core Capabilities Grid (Concise & Scannable) */}
               <div className="grid grid-cols-2 gap-2">
                 <div
-                  className={`p-[10px_12px] rounded-[12px] border flex flex-col gap-0.5 ${
+                  className={`p-2.5 rounded-[12px] border flex items-center gap-2.5 ${
                     isDark ? 'bg-[#151A21] border-[#232A33]' : 'bg-[#FFFFFF] border-[#E2E8F0]'
                   }`}
                 >
-                  <span className="text-[11px] text-[#8B96A3]">{t.appVersionLabel}</span>
-                  <span dir="ltr" className="font-mono text-[12px] font-bold text-[#FF9A4D] text-right">
-                    1.0.5 Stable
-                  </span>
+                  <Zap className="w-4 h-4 text-[#FF9A4D] shrink-0" />
+                  <div className="flex flex-col min-w-0">
+                    <span className="font-bold text-[11.5px] truncate">
+                      {lang === 'fa' ? 'سهمیه ۵۰ گیگ واقعی' : '50 GB Live Quota'}
+                    </span>
+                    <span className="text-[10.5px] text-[#8B96A3] truncate">
+                      {lang === 'fa' ? 'همگام با سرور موزیلا' : 'Mozilla Guardian Sync'}
+                    </span>
+                  </div>
                 </div>
 
                 <div
-                  className={`p-[10px_12px] rounded-[12px] border flex flex-col gap-0.5 ${
+                  className={`p-2.5 rounded-[12px] border flex items-center gap-2.5 ${
                     isDark ? 'bg-[#151A21] border-[#232A33]' : 'bg-[#FFFFFF] border-[#E2E8F0]'
                   }`}
                 >
-                  <span className="text-[11px] text-[#8B96A3]">{t.coreFrameworkLabel}</span>
-                  <span dir="ltr" className="font-mono text-[12px] font-semibold text-right">
-                    Wails 2.9 · Go 1.23
-                  </span>
+                  <Cpu className="w-4 h-4 text-[#6FD6F0] shrink-0" />
+                  <div className="flex flex-col min-w-0">
+                    <span className="font-bold text-[11.5px] truncate">
+                      {lang === 'fa' ? 'تونل برنامه‌ها و Wintun' : 'Wintun + App Split'}
+                    </span>
+                    <span className="text-[10.5px] text-[#8B96A3] truncate">
+                      {lang === 'fa' ? 'لایه ۳ و تفکیک برنامه' : 'Layer-3 & Per-App'}
+                    </span>
+                  </div>
                 </div>
 
                 <div
-                  className={`p-[10px_12px] rounded-[12px] border flex flex-col gap-0.5 ${
+                  className={`p-2.5 rounded-[12px] border flex items-center gap-2.5 ${
                     isDark ? 'bg-[#151A21] border-[#232A33]' : 'bg-[#FFFFFF] border-[#E2E8F0]'
                   }`}
                 >
-                  <span className="text-[11px] text-[#8B96A3]">{t.networkDriverLabel}</span>
-                  <span dir="ltr" className="font-mono text-[12px] font-semibold text-right">
-                    Wintun 0.14.1
-                  </span>
+                  <ShieldCheck className="w-4 h-4 text-[#2DD4A0] shrink-0" />
+                  <div className="flex flex-col min-w-0">
+                    <span className="font-bold text-[11.5px] truncate">
+                      {lang === 'fa' ? 'ضد فیلترینگ TLS' : 'TLS Anti-DPI Split'}
+                    </span>
+                    <span className="text-[10.5px] text-[#8B96A3] truncate">
+                      {lang === 'fa' ? 'SNI Split + Kill Switch' : 'SNI Split + Kill Switch'}
+                    </span>
+                  </div>
                 </div>
 
                 <div
-                  className={`p-[10px_12px] rounded-[12px] border flex flex-col gap-0.5 ${
+                  className={`p-2.5 rounded-[12px] border flex items-center gap-2.5 ${
                     isDark ? 'bg-[#151A21] border-[#232A33]' : 'bg-[#FFFFFF] border-[#E2E8F0]'
                   }`}
                 >
-                  <span className="text-[11px] text-[#8B96A3]">{t.distributionTypeLabel}</span>
-                  <span className="text-[12px] font-bold text-[#2DD4A0]">
-                    Portable · Setup
-                  </span>
+                  <Globe className="w-4 h-4 text-[#B79CF7] shrink-0" />
+                  <div className="flex flex-col min-w-0">
+                    <span className="font-bold text-[11.5px] truncate">
+                      {lang === 'fa' ? '۳۸ سرور فاستلی' : '38 Fastly Nodes'}
+                    </span>
+                    <span className="text-[10.5px] text-[#8B96A3] truncate">
+                      {lang === 'fa' ? '۲۲ کشور · DoH امن' : '22 Countries · DoH'}
+                    </span>
+                  </div>
                 </div>
               </div>
 
-              {/* Open-Source Footer */}
-              <div className="flex items-center justify-center gap-2 text-[11px] text-[#8B96A3] pt-1">
-                <span className="w-2 h-2 rounded-full bg-[#2DD4A0]"></span>
-                <span>{t.openSourceNotice}</span>
+              {/* Compact Build Specs */}
+              <div
+                className={`p-[10px_14px] rounded-[12px] border flex items-center justify-between text-[11px] ${
+                  isDark ? 'bg-[#151A21] border-[#232A33]' : 'bg-[#FFFFFF] border-[#E2E8F0]'
+                }`}
+              >
+                <span className="text-[#8B96A3]">
+                  {t.appVersionLabel} <strong className="text-[#FF9A4D]">v{APP_VERSION}</strong>
+                </span>
+                <span dir="ltr" className="text-[#8B96A3]">Wails 2.9 · Wintun 0.14</span>
+                <span dir="ltr" className="text-[#2DD4A0] font-bold">MIT Open Source</span>
               </div>
             </>
           )}

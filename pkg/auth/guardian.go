@@ -88,28 +88,31 @@ type TokenResponse struct {
 
 // PoolAccountRecord represents an authenticated Firefox Account stored inside data/account.bin.
 type PoolAccountRecord struct {
-	ID           string `json:"id"`
-	Email        string `json:"email"`
-	UID          string `json:"uid"`
-	SessionToken string `json:"session_token"`
-	AccessToken  string `json:"access_token,omitempty"`
-	QuotaGB      int    `json:"quota_gb"`
-	Active       bool   `json:"active"`
-	AddedAt      string `json:"added_at"`
+	ID                  string `json:"id"`
+	Email               string `json:"email"`
+	UID                 string `json:"uid"`
+	SessionToken        string `json:"session_token"`
+	AccessToken         string `json:"access_token,omitempty"`
+	QuotaGB             int    `json:"quota_gb"`
+	QuotaRemainingBytes int64  `json:"quota_remaining_bytes,omitempty"`
+	Active              bool   `json:"active"`
+	AddedAt             string `json:"added_at"`
 }
 
 // SavedTokens persists encrypted OAuth, session, and multi-account pool credentials inside data/account.bin.
 type SavedTokens struct {
-	Email        string              `json:"email"`
-	UID          string              `json:"uid"`
-	SessionToken string              `json:"session_token,omitempty"`
-	AccessToken  string              `json:"access_token"`
-	RefreshToken string              `json:"refresh_token"`
-	Scope        string              `json:"scope"`
-	ObtainedAt   time.Time           `json:"obtained_at"`
-	ExpiresIn    int                 `json:"expires_in"`
-	TokenPool    []string            `json:"token_pool,omitempty"`
-	PoolAccounts []PoolAccountRecord `json:"pool_accounts,omitempty"`
+	Email               string              `json:"email"`
+	UID                 string              `json:"uid"`
+	SessionToken        string              `json:"session_token,omitempty"`
+	AccessToken         string              `json:"access_token"`
+	RefreshToken        string              `json:"refresh_token"`
+	Scope               string              `json:"scope"`
+	ObtainedAt          time.Time           `json:"obtained_at"`
+	ExpiresIn           int                 `json:"expires_in"`
+	QuotaMaxBytes       int64               `json:"quota_max_bytes,omitempty"`
+	QuotaRemainingBytes int64               `json:"quota_remaining_bytes,omitempty"`
+	TokenPool           []string            `json:"token_pool,omitempty"`
+	PoolAccounts        []PoolAccountRecord `json:"pool_accounts,omitempty"`
 }
 
 func (s *SavedTokens) AccessTokenValid() bool {
@@ -127,6 +130,7 @@ type Entitlement struct {
 	MaxBytes         int64  `json:"maxBytes"`
 	LimitedBandwidth bool   `json:"limited_bandwidth"`
 	QuotaRemaining   int64  `json:"quotaRemaining"`
+	HasLiveQuota     bool   `json:"hasLiveQuota,omitempty"`
 	QuotaReset       int64  `json:"quotaReset"`
 }
 
@@ -136,6 +140,7 @@ type ProxyPassInfo struct {
 	ExpiresAt      int64  `json:"expires_at"`
 	QuotaMax       int64  `json:"quota_max"`
 	QuotaRemaining int64  `json:"quota_remaining"`
+	HasLiveQuota   bool   `json:"has_live_quota,omitempty"`
 	QuotaReset     int64  `json:"quota_reset"`
 }
 
@@ -824,6 +829,15 @@ func (g *GuardianService) CompleteSessionLogin(ctx context.Context, email, uid, 
 		return nil, nil, err
 	}
 
+	g.mu.RLock()
+	var existingPool []string
+	var existingAccounts []PoolAccountRecord
+	if g.savedTokens != nil {
+		existingPool = append([]string(nil), g.savedTokens.TokenPool...)
+		existingAccounts = append([]PoolAccountRecord(nil), g.savedTokens.PoolAccounts...)
+	}
+	g.mu.RUnlock()
+
 	saved := &SavedTokens{
 		Email:        email,
 		UID:          uid,
@@ -833,8 +847,12 @@ func (g *GuardianService) CompleteSessionLogin(ctx context.Context, email, uid, 
 		Scope:        tokResp.Scope,
 		ObtainedAt:   time.Now(),
 		ExpiresIn:    tokResp.ExpiresIn,
+		TokenPool:    existingPool,
+		PoolAccounts: existingAccounts,
 	}
-	_ = g.SaveTokens(saved)
+	if err := g.SaveTokens(saved); err != nil {
+		return nil, nil, fmt.Errorf("failed to persist account session to data/account.bin: %w", err)
+	}
 
 	g.mu.Lock()
 	g.savedTokens = saved
@@ -852,6 +870,10 @@ func (g *GuardianService) CompleteSessionLogin(ctx context.Context, email, uid, 
 			QuotaRemaining:   DefaultMonthlyAllowance,
 		}
 	}
+
+	saved.QuotaMaxBytes = entitlement.MaxBytes
+	saved.QuotaRemainingBytes = entitlement.QuotaRemaining
+	_ = g.SaveTokens(saved)
 
 	return saved, entitlement, nil
 }
@@ -942,7 +964,153 @@ func (g *GuardianService) RefreshOAuthToken(ctx context.Context, refreshToken st
 	return &tok, nil
 }
 
-// EnsureGuardianEntitlement checks /api/v1/fpn/status and calls /api/v1/fpn/activate if needed.
+// extractQuotaFromGuardianResponse inspects JSON fields (camelCase & snake_case), HTTP headers, and JWT claims
+// to extract real server-reported quota limits and remaining bytes.
+func extractQuotaFromGuardianResponse(data []byte, hdr http.Header, jwtToken string) (maxBytes int64, remBytes int64, hasRem bool, resetEpoch int64) {
+	maxBytes = DefaultMonthlyAllowance
+	remBytes = -1
+
+	parseAnyInt64 := func(v any) (int64, bool) {
+		switch val := v.(type) {
+		case float64:
+			return int64(val), true
+		case int64:
+			return val, true
+		case string:
+			if n, err := strconv.ParseInt(strings.TrimSpace(val), 10, 64); err == nil {
+				return n, true
+			}
+		}
+		return 0, false
+	}
+
+	var rawMap map[string]any
+	if len(data) > 0 && json.Unmarshal(data, &rawMap) == nil {
+		for _, k := range []string{"maxBytes", "max_bytes", "quotaMax", "quota_max", "limit_bytes", "bandwidth_limit"} {
+			if v, ok := rawMap[k]; ok {
+				if n, ok2 := parseAnyInt64(v); ok2 && n > 0 {
+					maxBytes = n
+					break
+				}
+			}
+		}
+		for _, k := range []string{"quotaRemaining", "quota_remaining", "remainingBytes", "remaining_bytes", "bytes_remaining", "available_bytes"} {
+			if v, ok := rawMap[k]; ok {
+				if n, ok2 := parseAnyInt64(v); ok2 && n >= 0 {
+					remBytes = n
+					hasRem = true
+					break
+				}
+			}
+		}
+		if !hasRem {
+			for _, k := range []string{"usedBytes", "used_bytes", "bytes_used", "quota_used", "consumed_bytes"} {
+				if v, ok := rawMap[k]; ok {
+					if used, ok2 := parseAnyInt64(v); ok2 && used >= 0 {
+						rem := maxBytes - used
+						if rem < 0 {
+							rem = 0
+						}
+						remBytes = rem
+						hasRem = true
+						break
+					}
+				}
+			}
+		}
+		for _, k := range []string{"quotaReset", "quota_reset", "reset_at", "expires_at"} {
+			if v, ok := rawMap[k]; ok {
+				if n, ok2 := parseAnyInt64(v); ok2 && n > 0 {
+					resetEpoch = n
+					break
+				}
+			}
+		}
+	}
+
+	if hdr != nil {
+		for _, hk := range []string{"X-Quota-Limit", "X-Quota-Max", "Quota-Limit"} {
+			if hv := strings.TrimSpace(hdr.Get(hk)); hv != "" {
+				if n, err := strconv.ParseInt(hv, 10, 64); err == nil && n > 0 {
+					maxBytes = n
+					break
+				}
+			}
+		}
+		for _, hk := range []string{"X-Quota-Remaining", "Quota-Remaining", "X-RateLimit-Remaining-Bytes"} {
+			if hv := strings.TrimSpace(hdr.Get(hk)); hv != "" {
+				if n, err := strconv.ParseInt(hv, 10, 64); err == nil && n >= 0 {
+					remBytes = n
+					hasRem = true
+					break
+				}
+			}
+		}
+		if !hasRem {
+			for _, hk := range []string{"X-Quota-Used", "Quota-Used"} {
+				if hv := strings.TrimSpace(hdr.Get(hk)); hv != "" {
+					if used, err := strconv.ParseInt(hv, 10, 64); err == nil && used >= 0 {
+						rem := maxBytes - used
+						if rem < 0 {
+							rem = 0
+						}
+						remBytes = rem
+						hasRem = true
+						break
+					}
+				}
+			}
+		}
+		for _, hk := range []string{"X-Quota-Reset", "Quota-Reset"} {
+			if hv := strings.TrimSpace(hdr.Get(hk)); hv != "" {
+				if n, err := strconv.ParseInt(hv, 10, 64); err == nil && n > 0 {
+					resetEpoch = n
+					break
+				}
+			}
+		}
+	}
+
+	if !hasRem && jwtToken != "" {
+		parts := strings.Split(jwtToken, ".")
+		if len(parts) >= 2 {
+			if decoded, err := base64.RawURLEncoding.DecodeString(parts[1]); err == nil {
+				var claims map[string]any
+				if json.Unmarshal(decoded, &claims) == nil {
+					for _, k := range []string{"quota_remaining", "remaining_bytes", "quotaRemaining"} {
+						if v, ok := claims[k]; ok {
+							if n, ok2 := parseAnyInt64(v); ok2 && n >= 0 {
+								remBytes = n
+								hasRem = true
+								break
+							}
+						}
+					}
+					if !hasRem {
+						for _, k := range []string{"used_bytes", "bytes_used"} {
+							if v, ok := claims[k]; ok {
+								if used, ok2 := parseAnyInt64(v); ok2 && used >= 0 {
+									rem := maxBytes - used
+									if rem < 0 {
+										rem = 0
+									}
+									remBytes = rem
+									hasRem = true
+									break
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return maxBytes, remBytes, hasRem, resetEpoch
+}
+
+// EnsureGuardianEntitlement checks /api/v1/fpn/status and calls /api/v1/fpn/activate if needed,
+// then queries /api/v1/fpn/token to read live quota headers/claims from Mozilla Guardian.
 func (g *GuardianService) EnsureGuardianEntitlement(ctx context.Context, accessToken string) (*Entitlement, error) {
 	ent, err := g.FetchUserInfo(ctx, accessToken)
 	if err != nil {
@@ -956,10 +1124,23 @@ func (g *GuardianService) EnsureGuardianEntitlement(ctx context.Context, accessT
 		if pass.QuotaMax > 0 {
 			ent.MaxBytes = pass.QuotaMax
 		}
-		if pass.QuotaRemaining >= 0 {
+		if pass.HasLiveQuota && pass.QuotaRemaining >= 0 {
 			ent.QuotaRemaining = pass.QuotaRemaining
+			ent.HasLiveQuota = true
 		}
-		ent.QuotaReset = pass.QuotaReset
+		if pass.QuotaReset > 0 {
+			ent.QuotaReset = pass.QuotaReset
+		}
+	}
+	if !ent.HasLiveQuota && ent.QuotaRemaining <= 0 {
+		// Fall back to previously persisted remaining bytes if available, otherwise 50 GB
+		g.mu.RLock()
+		if g.savedTokens != nil && g.savedTokens.QuotaRemainingBytes > 0 {
+			ent.QuotaRemaining = g.savedTokens.QuotaRemainingBytes
+		} else {
+			ent.QuotaRemaining = ent.MaxBytes
+		}
+		g.mu.RUnlock()
 	}
 	return ent, nil
 }
@@ -990,8 +1171,18 @@ func (g *GuardianService) FetchUserInfo(ctx context.Context, accessToken string)
 	if err := json.Unmarshal(data, &ent); err != nil {
 		return nil, err
 	}
-	if ent.MaxBytes <= 0 {
+	maxB, remB, hasRem, resetEp := extractQuotaFromGuardianResponse(data, resp.Header, "")
+	if maxB > 0 {
+		ent.MaxBytes = maxB
+	} else if ent.MaxBytes <= 0 {
 		ent.MaxBytes = DefaultMonthlyAllowance
+	}
+	if hasRem && remB >= 0 {
+		ent.QuotaRemaining = remB
+		ent.HasLiveQuota = true
+	}
+	if resetEp > 0 {
+		ent.QuotaReset = resetEp
 	}
 	return &ent, nil
 }
@@ -1023,13 +1214,25 @@ func (g *GuardianService) ActivateGuardian(ctx context.Context, accessToken stri
 	if err := json.Unmarshal(data, &ent); err != nil {
 		return nil, err
 	}
-	if ent.MaxBytes <= 0 {
+	maxB, remB, hasRem, resetEp := extractQuotaFromGuardianResponse(data, resp.Header, "")
+	if maxB > 0 {
+		ent.MaxBytes = maxB
+	} else if ent.MaxBytes <= 0 {
 		ent.MaxBytes = DefaultMonthlyAllowance
+	}
+	if hasRem && remB >= 0 {
+		ent.QuotaRemaining = remB
+		ent.HasLiveQuota = true
+	} else {
+		ent.QuotaRemaining = ent.MaxBytes
+	}
+	if resetEp > 0 {
+		ent.QuotaReset = resetEp
 	}
 	return &ent, nil
 }
 
-// FetchProxyPass calls GET https://vpn.mozilla.org/api/v1/fpn/token and reads X-Quota-* headers.
+// FetchProxyPass calls GET https://vpn.mozilla.org/api/v1/fpn/token and reads quota headers, body fields, and JWT claims.
 func (g *GuardianService) FetchProxyPass(ctx context.Context, accessToken string) (*ProxyPassInfo, error) {
 	tokenURL := strings.TrimRight(g.guardianBaseURL, "/") + "/api/v1/fpn/token"
 	resp, err := g.doWithChallenge(ctx, func() (*http.Request, error) {
@@ -1074,18 +1277,14 @@ func (g *GuardianService) FetchProxyPass(ctx context.Context, accessToken string
 		expiresAt = parseJWTExpiry(parsed.Token)
 	}
 
-	quotaMax, _ := strconv.ParseInt(resp.Header.Get("X-Quota-Limit"), 10, 64)
-	quotaRem, _ := strconv.ParseInt(resp.Header.Get("X-Quota-Remaining"), 10, 64)
-	quotaReset, _ := strconv.ParseInt(resp.Header.Get("X-Quota-Reset"), 10, 64)
-	if quotaMax <= 0 {
-		quotaMax = DefaultMonthlyAllowance
-	}
+	quotaMax, quotaRem, hasRem, quotaReset := extractQuotaFromGuardianResponse(data, resp.Header, parsed.Token)
 
 	return &ProxyPassInfo{
 		Token:          parsed.Token,
 		ExpiresAt:      expiresAt,
 		QuotaMax:       quotaMax,
 		QuotaRemaining: quotaRem,
+		HasLiveQuota:   hasRem,
 		QuotaReset:     quotaReset,
 	}, nil
 }
@@ -1256,6 +1455,18 @@ func parseJWTExpiry(jwt string) int64 {
 
 // AddAccountToPool authenticates a secondary Firefox Account via PBKDF2-SHA256 + HKDF and stores it in data/account.bin.
 func (g *GuardianService) AddAccountToPool(ctx context.Context, email, password string) (*SavedTokens, *Entitlement, error) {
+	// Snapshot prior state so in-memory pool is rolled back if persistence fails
+	g.mu.RLock()
+	var prevSaved *SavedTokens
+	if g.savedTokens != nil {
+		cp := *g.savedTokens
+		cp.TokenPool = append([]string(nil), g.savedTokens.TokenPool...)
+		cp.PoolAccounts = append([]PoolAccountRecord(nil), g.savedTokens.PoolAccounts...)
+		prevSaved = &cp
+	}
+	prevPool := append([]string(nil), g.tokenPool...)
+	g.mu.RUnlock()
+
 	resp, err := g.Login(ctx, email, password)
 	if err != nil {
 		return nil, nil, err
@@ -1268,38 +1479,55 @@ func (g *GuardianService) AddAccountToPool(ctx context.Context, email, password 
 		return nil, nil, err
 	}
 
-	g.mu.Lock()
+	g.mu.RLock()
+	candidate := *saved
+	candidate.PoolAccounts = append([]PoolAccountRecord(nil), saved.PoolAccounts...)
+	updatedPool := append([]string(nil), g.tokenPool...)
+	g.mu.RUnlock()
+
 	found := false
-	for i := range g.savedTokens.PoolAccounts {
-		if strings.EqualFold(g.savedTokens.PoolAccounts[i].Email, email) {
-			g.savedTokens.PoolAccounts[i].SessionToken = resp.SessionToken
-			g.savedTokens.PoolAccounts[i].AccessToken = saved.AccessToken
-			g.savedTokens.PoolAccounts[i].UID = resp.UID
-			g.savedTokens.PoolAccounts[i].Active = true
+	for i := range candidate.PoolAccounts {
+		if strings.EqualFold(candidate.PoolAccounts[i].Email, email) {
+			candidate.PoolAccounts[i].SessionToken = resp.SessionToken
+			candidate.PoolAccounts[i].AccessToken = saved.AccessToken
+			candidate.PoolAccounts[i].UID = resp.UID
+			candidate.PoolAccounts[i].QuotaRemainingBytes = ent.QuotaRemaining
+			candidate.PoolAccounts[i].Active = true
 			found = true
 		} else {
-			g.savedTokens.PoolAccounts[i].Active = false
+			candidate.PoolAccounts[i].Active = false
 		}
 	}
 	if !found {
-		g.savedTokens.PoolAccounts = append(g.savedTokens.PoolAccounts, PoolAccountRecord{
-			ID:           fmt.Sprintf("acc-%d", time.Now().Unix()),
-			Email:        email,
-			UID:          resp.UID,
-			SessionToken: resp.SessionToken,
-			AccessToken:  saved.AccessToken,
-			QuotaGB:      50,
-			Active:       true,
-			AddedAt:      time.Now().Format("15:04:05"),
+		candidate.PoolAccounts = append(candidate.PoolAccounts, PoolAccountRecord{
+			ID:                  fmt.Sprintf("acc-%d", time.Now().Unix()),
+			Email:               email,
+			UID:                 resp.UID,
+			SessionToken:        resp.SessionToken,
+			AccessToken:         saved.AccessToken,
+			QuotaGB:             50,
+			QuotaRemainingBytes: ent.QuotaRemaining,
+			Active:              true,
+			AddedAt:             time.Now().Format("15:04:05"),
 		})
 	}
-	g.tokenPool = append(g.tokenPool, resp.SessionToken)
-	g.savedTokens.TokenPool = g.tokenPool
-	savedCopy := *g.savedTokens
+	updatedPool = append(updatedPool, resp.SessionToken)
+	candidate.TokenPool = updatedPool
+
+	if err := g.SaveTokens(&candidate); err != nil {
+		g.mu.Lock()
+		g.savedTokens = prevSaved
+		g.tokenPool = prevPool
+		g.mu.Unlock()
+		return nil, nil, fmt.Errorf("failed to persist account pool to data/account.bin: %w", err)
+	}
+
+	g.mu.Lock()
+	g.savedTokens = &candidate
+	g.tokenPool = updatedPool
 	g.mu.Unlock()
 
-	_ = g.SaveTokens(&savedCopy)
-	return &savedCopy, ent, nil
+	return &candidate, ent, nil
 }
 
 // accountBinPaths returns ordered candidate paths for data/account.bin:

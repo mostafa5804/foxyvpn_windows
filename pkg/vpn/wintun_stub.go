@@ -26,3 +26,11 @@ func SetWindowsSystemProxy(proxyServer string) error {
 func ClearWindowsSystemProxy() error {
 	return nil
 }
+
+func EngageKillSwitch(edgeIP string) error {
+	return nil
+}
+
+func DisengageKillSwitch() error {
+	return nil
+}

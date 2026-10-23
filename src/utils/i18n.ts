@@ -171,12 +171,42 @@ export interface Translations {
   sessionSavedToast: string;
   sessionRestoredToast: string;
   portableUpdateNotice: string;
+
+  // v1.0.6 additions
+  syncQuotaBtn: string;
+  transportProtocolLabel: string;
+  protocolHttp2Connect: string;
+  protocolHttp2Tls: string;
+  protocolMasqueQuic: string;
+  protocolAuto: string;
+  splitTunnelTitle: string;
+  splitModeAll: string;
+  splitModeInclude: string;
+  splitModeExclude: string;
+  splitTunnelDesc: string;
+  splitTunnelAppsPlaceholder: string;
+  addAppBtn: string;
+  localPortsTitle: string;
+  socksPortLabel: string;
+  httpPortLabel: string;
+  allowLanLabel: string;
+  allowLanDesc: string;
+  fragmentSizeLabel: string;
+  fragmentDelayLabel: string;
+  blockIpv6Label: string;
+  blockIpv6Desc: string;
+  aboutSummary: string;
+  checkForUpdatesBtn: string;
+  checkingUpdates: string;
+  updateAvailableTitle: string;
+  upToDateNotice: string;
+  downloadUpdateBtn: string;
 }
 
 export const translations: Record<Language, Translations> = {
   fa: {
     appName: 'FoxyVPN Windows',
-    version: '1.0.5',
+    version: '1.0.6',
     dashboard: 'داشبورد',
     auth: 'اکانت و ورود',
     settings: 'تنظیمات تونل',
@@ -339,10 +369,39 @@ export const translations: Record<Language, Translations> = {
     sessionSavedToast: 'فایل باینری data/account.bin با موفقیت ذخیره شد',
     sessionRestoredToast: 'اکانت‌ها از فایل باینری data/account.bin بازیابی شدند',
     portableUpdateNotice: 'پشتیبانی از آپدیت بدون لاگین مجدد (Portable & Setup)',
+
+    syncQuotaBtn: 'استعلام زنده سهمیه باقی‌مانده از سرور موزیلا',
+    transportProtocolLabel: 'پروتکل انتقال تونل (Transport Protocol)',
+    protocolHttp2Connect: 'HTTP/2 CONNECT · پورت 2499 (پیشنهادی)',
+    protocolHttp2Tls: 'HTTP/2 TLS · پورت 443 (ضد فایروال)',
+    protocolMasqueQuic: 'MASQUE HTTP/3 QUIC · کمترین پینگ',
+    protocolAuto: 'انتخاب هوشمند خودکار (Auto Fallback)',
+    splitTunnelTitle: 'تونل برنامه‌ها (Per-App Split Tunneling)',
+    splitModeAll: 'همه برنامه‌ها',
+    splitModeInclude: 'فقط انتخابی‌ها',
+    splitModeExclude: 'استثنا (بدون فیلتر)',
+    splitTunnelDesc: 'برنامه‌های موردنظر را انتخاب کنید یا نام فایل اجرایی (.exe) را اضافه نمایید:',
+    splitTunnelAppsPlaceholder: 'نام برنامه (مثال: chrome.exe)',
+    addAppBtn: 'افزودن',
+    localPortsTitle: 'پورت‌های پراکسی محلی و اشتراک شبکه',
+    socksPortLabel: 'پورت SOCKS5 محلی',
+    httpPortLabel: 'پورت HTTP محلی',
+    allowLanLabel: 'اشتراک‌گذاری در شبکه محلی (Allow LAN)',
+    allowLanDesc: 'امکان اتصال گوشی و سایر دستگاه‌های وای‌فای به پراکسی این سیستم',
+    fragmentSizeLabel: 'اندازه قطعه (بایت)',
+    fragmentDelayLabel: 'وقفه ارسال (ms)',
+    blockIpv6Label: 'مسدودسازی نشت IPv6 (IPv6 Leak Block)',
+    blockIpv6Desc: 'جلوگیری از لو رفتن آی‌پی واقعی از طریق ترافیک IPv6 خارج از تونل',
+    aboutSummary: 'کلاینت سریع و بومی ویندوز برای استفاده از ۵۰ گیگابایت اینترنت ماهانه رایگان موزیلا روی ۳۸ سرور Fastly.',
+    checkForUpdatesBtn: 'بررسی نسخه جدید برنامه',
+    checkingUpdates: 'در حال بررسی آخرین نسخه در گیت‌هاب...',
+    updateAvailableTitle: 'نسخه جدید منتشر شده است',
+    upToDateNotice: 'شما از آخرین نسخه استفاده می‌کنید',
+    downloadUpdateBtn: 'دانلود نسخه جدید',
   },
   en: {
     appName: 'FoxyVPN Windows',
-    version: '1.0.5',
+    version: '1.0.6',
     dashboard: 'Dashboard',
     auth: 'Account',
     settings: 'Tunnel Settings',
@@ -505,5 +564,34 @@ export const translations: Record<Language, Translations> = {
     sessionSavedToast: 'Binary store data/account.bin saved automatically',
     sessionRestoredToast: 'Account restored from data/account.bin without re-login',
     portableUpdateNotice: 'Zero Re-Login Updates (Portable & Installer)',
+
+    syncQuotaBtn: 'Sync real remaining quota from Mozilla server',
+    transportProtocolLabel: 'Tunnel Transport Protocol',
+    protocolHttp2Connect: 'HTTP/2 CONNECT · Port 2499 (Recommended)',
+    protocolHttp2Tls: 'HTTP/2 TLS · Port 443 (Stealth)',
+    protocolMasqueQuic: 'MASQUE HTTP/3 QUIC · Low Latency',
+    protocolAuto: 'Automatic Smart Fallback',
+    splitTunnelTitle: 'Per-App Split Tunneling',
+    splitModeAll: 'All Apps',
+    splitModeInclude: 'Only Selected',
+    splitModeExclude: 'Bypass Selected',
+    splitTunnelDesc: 'Select Windows applications or add custom executable (.exe) names:',
+    splitTunnelAppsPlaceholder: 'Process name (e.g. chrome.exe)',
+    addAppBtn: 'Add',
+    localPortsTitle: 'Local Proxy Ports & LAN Sharing',
+    socksPortLabel: 'Local SOCKS5 Port',
+    httpPortLabel: 'Local HTTP Port',
+    allowLanLabel: 'Allow LAN Connections',
+    allowLanDesc: 'Allow other devices on Wi-Fi/LAN to use this proxy',
+    fragmentSizeLabel: 'Fragment Size (B)',
+    fragmentDelayLabel: 'Fragment Delay (ms)',
+    blockIpv6Label: 'Block IPv6 Leaks',
+    blockIpv6Desc: 'Prevent direct IPv6 traffic from leaking outside the VPN tunnel',
+    aboutSummary: 'Fast native Windows client for Mozilla 50 GB monthly free allowance across 38 Fastly nodes.',
+    checkForUpdatesBtn: 'Check for New Version',
+    checkingUpdates: 'Checking GitHub Releases...',
+    updateAvailableTitle: 'New version available',
+    upToDateNotice: 'You are on the latest version',
+    downloadUpdateBtn: 'Download Update',
   },
 };

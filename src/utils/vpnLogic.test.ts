@@ -114,8 +114,10 @@ test('filterAndSortServers filters by country/city and sorts by latency', () => 
 });
 
 test('encodeAccountBinPayload and decodeAccountBinPayload round-trip data/account.bin binary store', async () => {
-  const { encodeAccountBinPayload, decodeAccountBinPayload, ACCOUNT_BIN_MAGIC, APP_VERSION } = await import('./vpnLogic.ts');
-  assert.equal(APP_VERSION, '1.0.5');
+  const { encodeAccountBinPayload, decodeAccountBinPayload, ACCOUNT_BIN_MAGIC, APP_VERSION, compareSemver } = await import('./vpnLogic.ts');
+  assert.equal(APP_VERSION, '1.0.6');
+  assert.equal(compareSemver('1.0.7', '1.0.6'), 1);
+  assert.equal(compareSemver('v1.0.6', '1.0.6'), 0);
 
   const snapshot = {
     version: APP_VERSION,
@@ -148,8 +150,82 @@ test('encodeAccountBinPayload and decodeAccountBinPayload round-trip data/accoun
   assert.equal(binary.length > 8, true);
   const decoded = decodeAccountBinPayload(binary);
   assert.ok(decoded);
-  assert.equal(decoded.version, '1.0.5');
+  assert.equal(decoded.version, '1.0.6');
   assert.equal(decoded.user?.email, 'persistent@firefox.com');
   assert.equal(decoded.pool.length, 1);
 });
+
+test('computeQuotaRemainingFromBaseline prevents double-deduction after ProxyPass token renewal (Issue #8)', async () => {
+  const { computeQuotaRemainingFromBaseline } = await import('./vpnLogic.ts');
+  const initialServerQuota = FIFTY_GB_BYTES;
+  // Before renewal: 100 MB used, baseline is 0
+  const hundredMB = 100 * 1024 * 1024;
+  assert.equal(
+    computeQuotaRemainingFromBaseline(initialServerQuota, hundredMB, 0),
+    initialServerQuota - hundredMB
+  );
+
+  // At renewal time: server returns QuotaRemaining already reflecting the 100 MB used,
+  // and baseline is snapshotted to 100 MB.
+  const renewedServerQuota = initialServerQuota - hundredMB;
+  const baselineAtRenewal = hundredMB;
+
+  // Immediately after renewal (cumulative = 100 MB): remaining should equal renewedServerQuota, NOT deduct 100 MB twice!
+  assert.equal(
+    computeQuotaRemainingFromBaseline(renewedServerQuota, hundredMB, baselineAtRenewal),
+    renewedServerQuota
+  );
+
+  // After another 25 MB of traffic post-renewal (cumulative = 125 MB): only the 25 MB delta is subtracted.
+  const twentyFiveMB = 25 * 1024 * 1024;
+  assert.equal(
+    computeQuotaRemainingFromBaseline(renewedServerQuota, hundredMB + twentyFiveMB, baselineAtRenewal),
+    renewedServerQuota - twentyFiveMB
+  );
+});
+
+test('resolveServerSelection picks lowest-latency server and flags fallback when server ID is unknown (Issue #6)', async () => {
+  const { resolveServerSelection, AUTO_SERVER } = await import('./vpnLogic.ts');
+  const servers: ServerInfo[] = [
+    AUTO_SERVER,
+    {
+      id: 'fr-lfpb-1',
+      countryName: 'France',
+      countryCode: 'FR',
+      cityName: 'Paris',
+      cityCode: 'LFPB',
+      host: 'lfpb115.m1.fastly-masque.net',
+      port: 2499,
+      protocol: 'HTTP/2 CONNECT',
+      latencyMs: 41,
+    },
+    {
+      id: 'de-muc-1',
+      countryName: 'Germany',
+      countryCode: 'DE',
+      cityName: 'Munich',
+      cityCode: 'MUC',
+      host: 'muc139.m1.fastly-masque.net',
+      port: 2499,
+      protocol: 'HTTP/2 CONNECT',
+      latencyMs: 29,
+    },
+  ];
+
+  // Exact match
+  const exact = resolveServerSelection(servers, 'fr-lfpb-1');
+  assert.equal(exact.server.id, 'fr-lfpb-1');
+  assert.equal(exact.usedFallback, false);
+
+  // Auto mode picks lowest latency without fallback warning
+  const autoPick = resolveServerSelection(servers, 'auto');
+  assert.equal(autoPick.server.id, 'de-muc-1');
+  assert.equal(autoPick.usedFallback, false);
+
+  // Unknown server ID picks lowest latency and flags usedFallback = true
+  const fallbackPick = resolveServerSelection(servers, 'non-existent-server-id');
+  assert.equal(fallbackPick.server.id, 'de-muc-1');
+  assert.equal(fallbackPick.usedFallback, true);
+});
+
 

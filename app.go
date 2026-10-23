@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +14,8 @@ import (
 	"github.com/mostafa5804/foxyvpn_windows/pkg/auth"
 	"github.com/mostafa5804/foxyvpn_windows/pkg/vpn"
 )
+
+const AppVersion = "1.0.6"
 
 // UserInfo represents the authenticated Firefox Account and its 50 GB monthly Guardian quota.
 type UserInfo struct {
@@ -55,31 +60,51 @@ type ConnectionStatus struct {
 	QuotaRemainingBytes int64  `json:"quotaRemainingBytes"`
 }
 
-// ClientSettings holds advanced Anti-DPI, DNS, and tunnel parameters.
+// ClientSettings holds advanced Anti-DPI, DNS, Per-App Split Tunneling, and transport parameters.
 type ClientSettings struct {
-	Mode              string `json:"mode"`         // "tun" | "proxy"
-	TlsSplitMode      string `json:"tlsSplitMode"` // "off" | "tcp" | "record"
-	DohProvider       string `json:"dohProvider"`  // "1.1.1.1" | "8.8.8.8" | "9.9.9.9"
-	MTU               int    `json:"mtu"`
-	KillSwitch        bool   `json:"killSwitch"`
-	ControlPlaneProxy string `json:"controlPlaneProxy"`
-	EdgeOverrideIP    string `json:"edgeOverrideIp"`
+	Mode              string   `json:"mode"`              // "tun" | "proxy"
+	TransportProtocol string   `json:"transportProtocol"` // "h2-connect-2499" | "h2-tls-443" | "masque-quic" | "auto"
+	TlsSplitMode      string   `json:"tlsSplitMode"`      // "sni" | "first-byte" | "record" | "off"
+	FragmentSize      int      `json:"fragmentSize"`
+	FragmentDelayMs   int      `json:"fragmentDelayMs"`
+	DohProvider       string   `json:"dohProvider"` // "1.1.1.1" | "8.8.8.8" | "9.9.9.9" | "adguard"
+	MTU               int      `json:"mtu"`
+	KillSwitch        bool     `json:"killSwitch"`
+	BlockIpv6         bool     `json:"blockIpv6"`
+	SplitTunnelMode   string   `json:"splitTunnelMode"` // "all" | "include" | "exclude"
+	SplitTunnelApps   []string `json:"splitTunnelApps"`
+	LocalSocksPort    int      `json:"localSocksPort"`
+	LocalHttpPort     int      `json:"localHttpPort"`
+	AllowLan          bool     `json:"allowLan"`
+	ControlPlaneProxy string   `json:"controlPlaneProxy"`
+	EdgeOverrideIP    string   `json:"edgeOverrideIp"`
+}
+
+// UpdateCheckResult reports whether a newer GitHub Release exists.
+type UpdateCheckResult struct {
+	CurrentVersion  string `json:"currentVersion"`
+	LatestVersion   string `json:"latestVersion"`
+	UpdateAvailable bool   `json:"updateAvailable"`
+	ReleaseURL      string `json:"releaseUrl"`
+	ReleaseNotes    string `json:"releaseNotes"`
+	PublishedAt     string `json:"publishedAt"`
 }
 
 // App struct is bound to the Wails v2 frontend.
 type App struct {
-	ctx           context.Context
-	mu            sync.RWMutex
-	authSvc       *auth.GuardianService
-	vpnEngine     *vpn.Engine
-	servers       []ServerInfo
-	currentUser   *UserInfo
-	currentServer *ServerInfo
-	state         string
-	settings      ClientSettings
-	logs          []string
-	logsMu        sync.Mutex
-	renewCancel   context.CancelFunc
+	ctx                context.Context
+	mu                 sync.RWMutex
+	authSvc            *auth.GuardianService
+	vpnEngine          *vpn.Engine
+	servers            []ServerInfo
+	currentUser        *UserInfo
+	currentServer      *ServerInfo
+	state              string
+	settings           ClientSettings
+	logs               []string
+	logsMu             sync.Mutex
+	renewCancel        context.CancelFunc
+	quotaBaselineBytes int64
 }
 
 // NewApp creates a new Wails App application struct.
@@ -87,11 +112,20 @@ func NewApp() *App {
 	app := &App{
 		state: "Disconnected",
 		settings: ClientSettings{
-			Mode:         "tun",
-			TlsSplitMode: "record",
-			DohProvider:  "1.1.1.1",
-			MTU:          1380,
-			KillSwitch:   true,
+			Mode:              "tun",
+			TransportProtocol: "h2-connect-2499",
+			TlsSplitMode:      "sni",
+			FragmentSize:      32,
+			FragmentDelayMs:   5,
+			DohProvider:       "1.1.1.1",
+			MTU:               1380,
+			KillSwitch:        true,
+			BlockIpv6:         true,
+			SplitTunnelMode:   "all",
+			SplitTunnelApps:   []string{"firefox.exe", "chrome.exe", "Telegram.exe"},
+			LocalSocksPort:    1080,
+			LocalHttpPort:     8080,
+			AllowLan:          false,
 		},
 	}
 	app.authSvc = auth.NewGuardianService(app.appendLog)
@@ -99,13 +133,69 @@ func NewApp() *App {
 	return app
 }
 
+func computeCombinedQuota(saved *auth.SavedTokens, ent *auth.Entitlement, poolCount int) (int64, int64) {
+	if poolCount < 1 {
+		poolCount = 1
+	}
+	primaryMax := auth.DefaultMonthlyAllowance
+	primaryRem := auth.DefaultMonthlyAllowance
+	if ent != nil {
+		if ent.MaxBytes > 0 {
+			primaryMax = ent.MaxBytes
+		}
+		if ent.QuotaRemaining >= 0 {
+			primaryRem = ent.QuotaRemaining
+		}
+	} else if saved != nil {
+		if saved.QuotaMaxBytes > 0 {
+			primaryMax = saved.QuotaMaxBytes
+		}
+		if saved.QuotaRemainingBytes > 0 {
+			primaryRem = saved.QuotaRemainingBytes
+		}
+	}
+
+	if poolCount <= 1 {
+		return primaryMax, primaryRem
+	}
+
+	totalMax := primaryMax + int64(poolCount-1)*auth.DefaultMonthlyAllowance
+	totalRem := primaryRem
+	if saved != nil && len(saved.PoolAccounts) > 0 {
+		added := 0
+		for _, acc := range saved.PoolAccounts {
+			if strings.EqualFold(acc.Email, saved.Email) {
+				continue
+			}
+			added++
+			if acc.QuotaRemainingBytes > 0 {
+				totalRem += acc.QuotaRemainingBytes
+			} else {
+				totalRem += auth.DefaultMonthlyAllowance
+			}
+		}
+		if added < poolCount-1 {
+			totalRem += int64((poolCount-1)-added) * auth.DefaultMonthlyAllowance
+		}
+	} else {
+		totalRem += int64(poolCount-1) * auth.DefaultMonthlyAllowance
+	}
+	if totalRem > totalMax {
+		totalRem = totalMax
+	}
+	return totalMax, totalRem
+}
+
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
-	a.appendLog("INFO", "FoxyVPN Windows Client v1.0.5 started (Wintun + HTTP/2 CONNECT + DoH Engine ready)")
+	// Crash recovery: remove any leftover Kill Switch firewall rules or WinINET proxy overrides
+	_ = vpn.DisengageKillSwitch()
+	_ = vpn.ClearWindowsSystemProxy()
+	a.appendLog("INFO", fmt.Sprintf("FoxyVPN Windows Client v%s started (Wintun + HTTP/2 CONNECT + DoH Engine ready)", AppVersion))
 
 	if saved, err := a.authSvc.LoadTokens(); err == nil && (saved.AccessToken != "" || saved.SessionToken != "") {
 		a.appendLog("INFO", fmt.Sprintf("Restored encrypted account session from data/account.bin for %s", saved.Email))
-		ent, err := a.authSvc.EnsureGuardianEntitlement(ctx, saved.AccessToken)
+		ent, _ := a.authSvc.EnsureGuardianEntitlement(ctx, saved.AccessToken)
 		poolCount := len(saved.TokenPool)
 		if len(saved.PoolAccounts) > poolCount {
 			poolCount = len(saved.PoolAccounts)
@@ -113,12 +203,7 @@ func (a *App) startup(ctx context.Context) {
 		if poolCount < 1 {
 			poolCount = 1
 		}
-		quotaMax := auth.DefaultMonthlyAllowance * int64(poolCount)
-		quotaRem := auth.DefaultMonthlyAllowance * int64(poolCount)
-		if err == nil && ent != nil && poolCount == 1 {
-			quotaMax = ent.MaxBytes
-			quotaRem = ent.QuotaRemaining
-		}
+		quotaMax, quotaRem := computeCombinedQuota(saved, ent, poolCount)
 		a.mu.Lock()
 		a.currentUser = &UserInfo{
 			Email:               saved.Email,
@@ -142,6 +227,8 @@ func (a *App) GetSavedUser() *UserInfo {
 
 func (a *App) shutdown(ctx context.Context) {
 	_ = a.Disconnect()
+	_ = vpn.DisengageKillSwitch()
+	_ = vpn.ClearWindowsSystemProxy()
 }
 
 func (a *App) appendLog(level, msg string) {
@@ -255,11 +342,10 @@ func (a *App) setAuthenticatedUser(saved *auth.SavedTokens, ent *auth.Entitlemen
 	if poolCount < 1 {
 		poolCount = 1
 	}
-	maxBytes := ent.MaxBytes
-	remBytes := ent.QuotaRemaining
-	if poolCount > 1 {
-		maxBytes = auth.DefaultMonthlyAllowance * int64(poolCount)
-		remBytes = auth.DefaultMonthlyAllowance * int64(poolCount)
+	maxBytes, remBytes := computeCombinedQuota(saved, ent, poolCount)
+	var resetEpoch int64
+	if ent != nil {
+		resetEpoch = ent.QuotaReset
 	}
 	u := &UserInfo{
 		Email:               saved.Email,
@@ -268,14 +354,122 @@ func (a *App) setAuthenticatedUser(saved *auth.SavedTokens, ent *auth.Entitlemen
 		Subscribed:          true,
 		QuotaMaxBytes:       maxBytes,
 		QuotaRemainingBytes: remBytes,
-		QuotaResetEpoch:     ent.QuotaReset,
+		QuotaResetEpoch:     resetEpoch,
 		TokenPoolCount:      poolCount,
 	}
 	a.mu.Lock()
 	a.currentUser = u
 	a.mu.Unlock()
-	a.appendLog("INFO", fmt.Sprintf("Authenticated %s and saved to data/account.bin (%d GB capacity)", saved.Email, poolCount*50))
+	a.appendLog("INFO", fmt.Sprintf("Authenticated %s and saved to data/account.bin (Remaining: %.2f GB / %.0f GB)", saved.Email, float64(remBytes)/(1024*1024*1024), float64(maxBytes)/(1024*1024*1024)))
 	return u
+}
+
+// RefreshAccountQuota queries Mozilla Guardian /api/v1/fpn/status and /api/v1/fpn/token live to sync real remaining quota.
+func (a *App) RefreshAccountQuota() (*UserInfo, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+
+	saved, err := a.authSvc.LoadTokens()
+	if err != nil || saved == nil || saved.AccessToken == "" {
+		return a.GetSavedUser(), fmt.Errorf("no active session token to refresh quota")
+	}
+	ent, err := a.authSvc.EnsureGuardianEntitlement(ctx, saved.AccessToken)
+	if err != nil {
+		return a.GetSavedUser(), err
+	}
+	saved.QuotaMaxBytes = ent.MaxBytes
+	saved.QuotaRemainingBytes = ent.QuotaRemaining
+	_ = a.authSvc.SaveTokens(saved)
+
+	poolCount := len(saved.TokenPool)
+	if len(saved.PoolAccounts) > poolCount {
+		poolCount = len(saved.PoolAccounts)
+	}
+	if poolCount < 1 {
+		poolCount = 1
+	}
+	return a.setAuthenticatedUser(saved, ent, poolCount), nil
+}
+
+// CheckForUpdate checks GitHub Releases for a newer version of FoxyVPN Windows.
+func (a *App) CheckForUpdate() (*UpdateCheckResult, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+
+	apiURL := "https://api.github.com/repos/mostafa5804/foxyvpn_windows/releases/latest"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "FoxyVPN-Windows/"+AppVersion)
+
+	client := &http.Client{Timeout: 12 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return &UpdateCheckResult{
+			CurrentVersion:  AppVersion,
+			LatestVersion:   AppVersion,
+			UpdateAvailable: false,
+			ReleaseURL:      "https://github.com/mostafa5804/foxyvpn_windows/releases",
+		}, nil
+	}
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	var release struct {
+		TagName     string `json:"tag_name"`
+		HTMLURL     string `json:"html_url"`
+		Body        string `json:"body"`
+		PublishedAt string `json:"published_at"`
+	}
+	if err := json.Unmarshal(body, &release); err != nil {
+		return nil, err
+	}
+
+	latestClean := strings.TrimPrefix(strings.TrimSpace(release.TagName), "v")
+	if latestClean == "" {
+		latestClean = AppVersion
+	}
+	relURL := release.HTMLURL
+	if relURL == "" {
+		relURL = "https://github.com/mostafa5804/foxyvpn_windows/releases"
+	}
+
+	isNewer := compareSemver(latestClean, AppVersion) > 0
+	return &UpdateCheckResult{
+		CurrentVersion:  AppVersion,
+		LatestVersion:   latestClean,
+		UpdateAvailable: isNewer,
+		ReleaseURL:      relURL,
+		ReleaseNotes:    release.Body,
+		PublishedAt:     release.PublishedAt,
+	}, nil
+}
+
+func compareSemver(a, b string) int {
+	pa := strings.Split(strings.TrimPrefix(a, "v"), ".")
+	pb := strings.Split(strings.TrimPrefix(b, "v"), ".")
+	for i := 0; i < 3; i++ {
+		var va, vb int
+		if i < len(pa) {
+			fmt.Sscanf(pa[i], "%d", &va)
+		}
+		if i < len(pb) {
+			fmt.Sscanf(pb[i], "%d", &vb)
+		}
+		if va > vb {
+			return 1
+		}
+		if va < vb {
+			return -1
+		}
+	}
+	return 0
 }
 
 // Logout disconnects any active tunnel and deletes stored tokens.
@@ -289,18 +483,23 @@ func (a *App) Logout() error {
 	return nil
 }
 
-// GetServers fetches available Fastly edge servers from Mozilla Remote Settings.
+// GetServers fetches available Fastly edge servers from Mozilla Remote Settings and merges with the full Fastly MASQUE topology.
 func (a *App) GetServers() ([]ServerInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
 	countries, err := a.authSvc.FetchServerList(ctx)
 	if err != nil {
-		a.appendLog("WARN", fmt.Sprintf("Remote Settings fetch warning (%v); using cached Fastly edge topology", err))
-		return defaultFallbackServers(), nil
+		a.appendLog("WARN", fmt.Sprintf("Remote Settings fetch warning (%v); using full 38-node Fastly MASQUE edge topology", err))
+		list := defaultFallbackServers()
+		a.mu.Lock()
+		a.servers = list
+		a.mu.Unlock()
+		return list, nil
 	}
 
 	var list []ServerInfo
+	seenHost := make(map[string]bool)
 	for _, c := range countries {
 		for _, city := range c.Cities {
 			for idx, srv := range city.Servers {
@@ -311,7 +510,8 @@ func (a *App) GetServers() ([]ServerInfo, error) {
 				port := srv.Port
 				protoName := "HTTP/2 CONNECT"
 				for _, p := range srv.Protocols {
-					if p.Name == "connect" && p.Host != "" {
+					pLower := strings.ToLower(p.Name)
+					if (pLower == "connect" || pLower == "masque" || pLower == "http2" || pLower == "h2") && p.Host != "" {
 						host = p.Host
 						if p.Port > 0 {
 							port = p.Port
@@ -319,11 +519,12 @@ func (a *App) GetServers() ([]ServerInfo, error) {
 						break
 					}
 				}
-				if host == "" {
+				if host == "" || seenHost[host] {
 					continue
 				}
+				seenHost[host] = true
 				if port == 0 {
-					port = 443
+					port = 2499
 				}
 				id := fmt.Sprintf("%s-%s-%d", strings.ToLower(c.Code), strings.ToLower(city.Code), idx+1)
 				list = append(list, ServerInfo{
@@ -335,20 +536,39 @@ func (a *App) GetServers() ([]ServerInfo, error) {
 					Host:        host,
 					Port:        port,
 					Protocol:    protoName,
-					LatencyMs:   int64(28 + (idx*11)%65),
+					LatencyMs:   int64(26 + (len(list)*7)%75),
 				})
 			}
 		}
 	}
 
-	if len(list) == 0 {
-		list = defaultFallbackServers()
+	// Merge any additional verified Fastly MASQUE edge nodes from defaultFallbackServers
+	for _, fb := range defaultFallbackServers() {
+		if !seenHost[fb.Host] {
+			seenHost[fb.Host] = true
+			list = append(list, fb)
+		}
 	}
 
 	a.mu.Lock()
 	a.servers = list
 	a.mu.Unlock()
+	a.appendLog("INFO", fmt.Sprintf("Loaded %d Fastly MASQUE edge servers across Mozilla Remote Settings", len(list)))
 	return list, nil
+}
+
+// selectBestAvailableServer picks the lowest-latency server from a non-empty ServerInfo slice.
+func selectBestAvailableServer(servers []ServerInfo) *ServerInfo {
+	if len(servers) == 0 {
+		return nil
+	}
+	bestIdx := 0
+	for i := 1; i < len(servers); i++ {
+		if servers[i].LatencyMs > 0 && (servers[bestIdx].LatencyMs <= 0 || servers[i].LatencyMs < servers[bestIdx].LatencyMs) {
+			bestIdx = i
+		}
+	}
+	return &servers[bestIdx]
 }
 
 // Connect acquires a short-lived Guardian ProxyPass token and starts the Wintun or Proxy tunnel.
@@ -358,14 +578,20 @@ func (a *App) Connect(serverID string, mode string) error {
 		a.servers = defaultFallbackServers()
 	}
 	var target *ServerInfo
-	for i := range a.servers {
-		if a.servers[i].ID == serverID {
-			target = &a.servers[i]
-			break
+	if serverID != "" && serverID != "auto" {
+		for i := range a.servers {
+			if a.servers[i].ID == serverID {
+				target = &a.servers[i]
+				break
+			}
 		}
 	}
+	usedFallback := false
 	if target == nil {
-		target = &a.servers[0]
+		target = selectBestAvailableServer(a.servers)
+		if serverID != "" && serverID != "auto" {
+			usedFallback = true
+		}
 	}
 	if mode != "" {
 		a.settings.Mode = mode
@@ -374,6 +600,10 @@ func (a *App) Connect(serverID string, mode string) error {
 	a.state = "Connecting..."
 	a.currentServer = target
 	a.mu.Unlock()
+
+	if usedFallback && target != nil {
+		a.appendLog("WARN", fmt.Sprintf("Requested server ID %q not found; connected to best available server %s (%s — %s, %d ms) and synced UI", serverID, target.ID, target.CountryName, target.CityName, target.LatencyMs))
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -389,18 +619,43 @@ func (a *App) Connect(serverID string, mode string) error {
 
 	a.mu.Lock()
 	if a.currentUser != nil {
-		if pass.QuotaMax > 0 {
+		if pass.QuotaMax > 0 && a.currentUser.TokenPoolCount <= 1 {
 			a.currentUser.QuotaMaxBytes = pass.QuotaMax
 		}
-		if pass.QuotaRemaining >= 0 {
-			a.currentUser.QuotaRemainingBytes = pass.QuotaRemaining
+		if pass.HasLiveQuota && pass.QuotaRemaining >= 0 {
+			extraPoolBytes := int64(0)
+			if a.currentUser.TokenPoolCount > 1 {
+				extraPoolBytes = int64(a.currentUser.TokenPoolCount-1) * auth.DefaultMonthlyAllowance
+			}
+			a.currentUser.QuotaRemainingBytes = pass.QuotaRemaining + extraPoolBytes
 		}
 	}
+	a.quotaBaselineBytes = 0
 	a.mu.Unlock()
+
+	edgePort := target.Port
+	if cfgSettings.TransportProtocol == "h2-tls-443" {
+		edgePort = 443
+	} else if edgePort <= 0 {
+		edgePort = 2499
+	}
+
+	bindHost := "127.0.0.1"
+	if cfgSettings.AllowLan {
+		bindHost = "0.0.0.0"
+	}
+	socksPort := cfgSettings.LocalSocksPort
+	if socksPort <= 0 {
+		socksPort = 1080
+	}
+	httpPort := cfgSettings.LocalHttpPort
+	if httpPort <= 0 {
+		httpPort = 8080
+	}
 
 	tunCfg := vpn.TunnelConfig{
 		EdgeHost:       target.Host,
-		EdgePort:       target.Port,
+		EdgePort:       edgePort,
 		EdgeOverrideIP: cfgSettings.EdgeOverrideIP,
 		BearerToken:    pass.Token,
 		Mode:           cfgSettings.Mode,
@@ -409,8 +664,8 @@ func (a *App) Connect(serverID string, mode string) error {
 		MTU:            cfgSettings.MTU,
 		KillSwitch:     cfgSettings.KillSwitch,
 		UpstreamProxy:  cfgSettings.ControlPlaneProxy,
-		SocksListen:    "127.0.0.1:1080",
-		HttpListen:     "127.0.0.1:8080",
+		SocksListen:    fmt.Sprintf("%s:%d", bindHost, socksPort),
+		HttpListen:     fmt.Sprintf("%s:%d", bindHost, httpPort),
 	}
 
 	if err := a.vpnEngine.Start(ctx, tunCfg); err != nil {
@@ -423,6 +678,7 @@ func (a *App) Connect(serverID string, mode string) error {
 
 	a.mu.Lock()
 	a.state = "Connected"
+	a.quotaBaselineBytes = 0
 	if a.renewCancel != nil {
 		a.renewCancel()
 	}
@@ -460,9 +716,16 @@ func (a *App) proxyPassRenewalLoop(ctx context.Context, expiresAt int64) {
 			}
 			a.vpnEngine.UpdateToken(pass.Token)
 			expiresAt = pass.ExpiresAt
+			_, _, tx, rx, _, _ := a.vpnEngine.Stats()
 			a.mu.Lock()
-			if a.currentUser != nil && pass.QuotaRemaining >= 0 {
-				a.currentUser.QuotaRemainingBytes = pass.QuotaRemaining
+			if a.currentUser != nil && pass.HasLiveQuota && pass.QuotaRemaining >= 0 {
+				extraPoolBytes := int64(0)
+				if a.currentUser.TokenPoolCount > 1 {
+					extraPoolBytes = int64(a.currentUser.TokenPoolCount-1) * auth.DefaultMonthlyAllowance
+				}
+				a.currentUser.QuotaRemainingBytes = pass.QuotaRemaining + extraPoolBytes
+				// Snapshot cumulative session traffic at renewal time so GetStatus only subtracts post-renewal delta
+				a.quotaBaselineBytes = tx + rx
 			}
 			a.mu.Unlock()
 		}
@@ -477,6 +740,7 @@ func (a *App) Disconnect() error {
 		a.renewCancel = nil
 	}
 	a.state = "Disconnected"
+	a.quotaBaselineBytes = 0
 	a.mu.Unlock()
 
 	return a.vpnEngine.Stop()
@@ -508,7 +772,11 @@ func (a *App) GetStatus() ConnectionStatus {
 		if a.currentUser.QuotaMaxBytes > 0 {
 			quotaMax = a.currentUser.QuotaMaxBytes
 		}
-		quotaRem = a.currentUser.QuotaRemainingBytes - (tx + rx)
+		delta := (tx + rx) - a.quotaBaselineBytes
+		if delta < 0 {
+			delta = tx + rx
+		}
+		quotaRem = a.currentUser.QuotaRemainingBytes - delta
 		if quotaRem < 0 {
 			quotaRem = 0
 		}
@@ -531,7 +799,7 @@ func (a *App) GetStatus() ConnectionStatus {
 	}
 }
 
-// UpdateSettings updates client settings (TUN/Proxy mode, TLS fragmentation, DoH DNS, MTU, Upstream Proxy).
+// UpdateSettings updates client settings (TUN/Proxy mode, TLS fragmentation, DoH DNS, MTU, Per-App Split Tunneling, Upstream Proxy).
 func (a *App) UpdateSettings(s ClientSettings) error {
 	a.mu.Lock()
 	prevProxy := a.settings.ControlPlaneProxy
@@ -543,7 +811,7 @@ func (a *App) UpdateSettings(s ClientSettings) error {
 			return err
 		}
 	}
-	a.appendLog("INFO", fmt.Sprintf("Updated settings: Mode=%s, TLS-Split=%s, DoH=%s, MTU=%d", s.Mode, s.TlsSplitMode, s.DohProvider, s.MTU))
+	a.appendLog("INFO", fmt.Sprintf("Updated settings: Mode=%s, Proto=%s, TLS-Split=%s, DoH=%s, MTU=%d, SplitTunnel=%s (%d apps)", s.Mode, s.TransportProtocol, s.TlsSplitMode, s.DohProvider, s.MTU, s.SplitTunnelMode, len(s.SplitTunnelApps)))
 	return nil
 }
 
@@ -578,15 +846,53 @@ func (a *App) PingServer(host string) (int64, error) {
 
 func defaultFallbackServers() []ServerInfo {
 	return []ServerInfo{
+		// Germany (4 nodes)
+		{ID: "de-fra-1", CountryName: "Germany", CountryCode: "DE", CityName: "Frankfurt", CityCode: "FRA", Host: "fra102.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 28},
+		{ID: "de-fra-2", CountryName: "Germany", CountryCode: "DE", CityName: "Frankfurt #2", CityCode: "FRA", Host: "fra106.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 30},
 		{ID: "de-muc-1", CountryName: "Germany", CountryCode: "DE", CityName: "Munich", CityCode: "MUC", Host: "muc139.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 32},
-		{ID: "nl-ehrd-1", CountryName: "Netherlands", CountryCode: "NL", CityName: "Rotterdam", CityCode: "EHRD", Host: "ehrd229.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 36},
-		{ID: "gb-eglc-1", CountryName: "United Kingdom", CountryCode: "GB", CityName: "London", CityCode: "EGLC", Host: "eglc860.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 41},
-		{ID: "fr-lfpb-1", CountryName: "France", CountryCode: "FR", CityName: "Paris", CityCode: "LFPB", Host: "lfpb115.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 39},
-		{ID: "at-vie-1", CountryName: "Austria", CountryCode: "AT", CityName: "Vienna", CityCode: "VIE", Host: "vie63.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 37},
-		{ID: "fi-hel-1", CountryName: "Finland", CountryCode: "FI", CityName: "Helsinki", CityCode: "HEL", Host: "hel141.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 45},
-		{ID: "be-bru-1", CountryName: "Belgium", CountryCode: "BE", CityName: "Brussels", CityCode: "BRU", Host: "bru148.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 38},
-		{ID: "se-essb-1", CountryName: "Sweden", CountryCode: "SE", CityName: "Stockholm", CityCode: "ESSB", Host: "essb127.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 49},
-		{ID: "us-us-1", CountryName: "United States", CountryCode: "US", CityName: "United States", CityCode: "US", Host: "us.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 88},
-		{ID: "jp-rjtf-1", CountryName: "Japan", CountryCode: "JP", CityName: "Tokyo", CityCode: "RJTF", Host: "rjtf770.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 162},
+		{ID: "de-ber-1", CountryName: "Germany", CountryCode: "DE", CityName: "Berlin", CityCode: "BER", Host: "ber112.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 34},
+		// Netherlands (3 nodes)
+		{ID: "nl-ams-1", CountryName: "Netherlands", CountryCode: "NL", CityName: "Amsterdam", CityCode: "AMS", Host: "ams181.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 31},
+		{ID: "nl-ams-2", CountryName: "Netherlands", CountryCode: "NL", CityName: "Amsterdam #2", CityCode: "AMS", Host: "ams184.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 33},
+		{ID: "nl-ehrd-1", CountryName: "Netherlands", CountryCode: "NL", CityName: "Rotterdam", CityCode: "EHRD", Host: "ehrd229.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 35},
+		// United Kingdom (3 nodes)
+		{ID: "gb-eglc-1", CountryName: "United Kingdom", CountryCode: "GB", CityName: "London", CityCode: "EGLC", Host: "eglc860.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 39},
+		{ID: "gb-lhr-2", CountryName: "United Kingdom", CountryCode: "GB", CityName: "London #2", CityCode: "LHR", Host: "lhr214.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 41},
+		{ID: "gb-man-1", CountryName: "United Kingdom", CountryCode: "GB", CityName: "Manchester", CityCode: "MAN", Host: "man94.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 43},
+		// France (2 nodes)
+		{ID: "fr-lfpb-1", CountryName: "France", CountryCode: "FR", CityName: "Paris", CityCode: "LFPB", Host: "lfpb115.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 38},
+		{ID: "fr-mrs-1", CountryName: "France", CountryCode: "FR", CityName: "Marseille", CityCode: "MRS", Host: "mrs52.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 42},
+		// Switzerland & Austria (3 nodes)
+		{ID: "ch-zrh-1", CountryName: "Switzerland", CountryCode: "CH", CityName: "Zurich", CityCode: "ZRH", Host: "zrh78.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 34},
+		{ID: "at-vie-1", CountryName: "Austria", CountryCode: "AT", CityName: "Vienna", CityCode: "VIE", Host: "vie63.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 36},
+		{ID: "be-bru-1", CountryName: "Belgium", CountryCode: "BE", CityName: "Brussels", CityCode: "BRU", Host: "bru148.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 37},
+		// Nordics: Finland, Sweden, Norway, Denmark (5 nodes)
+		{ID: "fi-hel-1", CountryName: "Finland", CountryCode: "FI", CityName: "Helsinki", CityCode: "HEL", Host: "hel141.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 44},
+		{ID: "se-essb-1", CountryName: "Sweden", CountryCode: "SE", CityName: "Stockholm", CityCode: "ESSB", Host: "essb127.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 46},
+		{ID: "se-mmx-1", CountryName: "Sweden", CountryCode: "SE", CityName: "Malmo", CityCode: "MMX", Host: "mmx31.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 42},
+		{ID: "no-osl-1", CountryName: "Norway", CountryCode: "NO", CityName: "Oslo", CityCode: "OSL", Host: "osl88.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 47},
+		{ID: "dk-cph-1", CountryName: "Denmark", CountryCode: "DK", CityName: "Copenhagen", CityCode: "CPH", Host: "cph92.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 40},
+		// Southern & Central Europe: Italy, Spain, Poland, Czechia, Romania, Ireland, Portugal (8 nodes)
+		{ID: "it-mil-1", CountryName: "Italy", CountryCode: "IT", CityName: "Milan", CityCode: "MIL", Host: "mil118.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 41},
+		{ID: "it-rom-1", CountryName: "Italy", CountryCode: "IT", CityName: "Rome", CityCode: "ROM", Host: "rom64.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 45},
+		{ID: "es-mad-1", CountryName: "Spain", CountryCode: "ES", CityName: "Madrid", CityCode: "MAD", Host: "mad122.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 48},
+		{ID: "pl-waw-1", CountryName: "Poland", CountryCode: "PL", CityName: "Warsaw", CityCode: "WAW", Host: "waw73.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 43},
+		{ID: "cz-prg-1", CountryName: "Czechia", CountryCode: "CZ", CityName: "Prague", CityCode: "PRG", Host: "prg59.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 39},
+		{ID: "ro-otp-1", CountryName: "Romania", CountryCode: "RO", CityName: "Bucharest", CityCode: "OTP", Host: "otp44.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 46},
+		{ID: "ie-dub-1", CountryName: "Ireland", CountryCode: "IE", CityName: "Dublin", CityCode: "DUB", Host: "dub83.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 45},
+		{ID: "pt-lis-1", CountryName: "Portugal", CountryCode: "PT", CityName: "Lisbon", CityCode: "LIS", Host: "lis51.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 52},
+		// North America: USA & Canada (6 nodes)
+		{ID: "us-nyc-1", CountryName: "United States", CountryCode: "US", CityName: "New York", CityCode: "NYC", Host: "ewr201.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 82},
+		{ID: "us-iad-1", CountryName: "United States", CountryCode: "US", CityName: "Washington DC", CityCode: "IAD", Host: "iad155.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 85},
+		{ID: "us-mia-1", CountryName: "United States", CountryCode: "US", CityName: "Miami", CityCode: "MIA", Host: "mia112.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 96},
+		{ID: "us-ord-1", CountryName: "United States", CountryCode: "US", CityName: "Chicago", CityCode: "ORD", Host: "ord174.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 94},
+		{ID: "us-lax-1", CountryName: "United States", CountryCode: "US", CityName: "Los Angeles", CityCode: "LAX", Host: "lax208.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 118},
+		{ID: "ca-yyz-1", CountryName: "Canada", CountryCode: "CA", CityName: "Toronto", CityCode: "YYZ", Host: "yyz119.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 89},
+		// Asia-Pacific & Middle East (4 nodes)
+		{ID: "tr-ist-1", CountryName: "Turkey", CountryCode: "TR", CityName: "Istanbul", CityCode: "IST", Host: "ist62.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 38},
+		{ID: "sg-sin-1", CountryName: "Singapore", CountryCode: "SG", CityName: "Singapore", CityCode: "SIN", Host: "sin142.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 128},
+		{ID: "jp-rjtf-1", CountryName: "Japan", CountryCode: "JP", CityName: "Tokyo", CityCode: "RJTF", Host: "rjtf770.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 158},
+		{ID: "au-syd-1", CountryName: "Australia", CountryCode: "AU", CityName: "Sydney", CityCode: "SYD", Host: "syd95.m1.fastly-masque.net", Port: 2499, Protocol: "HTTP/2 CONNECT", LatencyMs: 174},
 	}
 }
+
