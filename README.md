@@ -2,7 +2,7 @@
 
 <img src="public/foxyvpn-windows-logo.svg" alt="FoxyVPN Windows Logo" width="130" height="130" />
 
-# 🦊🪟 FoxyVPN Windows (v1.0.5)
+# 🦊🪟 FoxyVPN Windows 
 
 **Native, Open-Source & Unlimited Multi-Account Desktop VPN for Windows 10 & 11**  
 **کلاینت دسکتاپ بومی، پرتابل، متن‌باز و چنداکانته فایرفاکس VPN برای ویندوز ۱۰ و ۱۱**
