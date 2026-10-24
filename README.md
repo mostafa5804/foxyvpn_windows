@@ -4,7 +4,7 @@
   <p><strong>Native Windows Desktop Client for Mozilla Firefox IP Protection (Guardian / Fastly MASQUE & HTTP/2 CONNECT)</strong></p>
 
   <p>
-    <a href="https://github.com/mostafa5804/foxyvpn_windows/actions/workflows/build.yml"><img src="https://github.com/mostafa5804/foxyvpn_windows/actions/workflows/build.yml/badge.svg" alt="Build Windows Executables" /></a>
+    </a>
     <a href="https://github.com/mostafa5804/foxyvpn_windows/releases"><img src="https://img.shields.io/github/v/release/mostafa5804/foxyvpn_windows?color=f97316&label=Release" alt="Latest Release" /></a>
     <img src="https://img.shields.io/badge/Platform-Windows%2010%20%2F%2011%20(x64)-0078D6?logo=windows" alt="Platform Windows" />
     <img src="https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go" alt="Go 1.23+" />
