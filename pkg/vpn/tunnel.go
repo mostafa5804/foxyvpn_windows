@@ -1169,7 +1169,7 @@ func pipeBidirectional(a, b net.Conn) {
 // (WSAEACCES / Hyper-V or WSL2 excluded port range) or already occupied by another process,
 // it automatically tests fallbackPorts, and finally port 0 (OS-assigned free port)
 // so the tunnel connection never fails due to local port collisions.
-func listenTCPWithFallback(preferredAddr string, fallbackPorts []int, logFn func(level, msg string)) (net.Listener, string, error) {
+func listenTCPWithFallback(preferredAddr string, fallbackPorts []int, logFn func(level, format string, args ...any)) (net.Listener, string, error) {
 	host, portStr, err := net.SplitHostPort(preferredAddr)
 	if err != nil {
 		host = "127.0.0.1"
@@ -1193,7 +1193,7 @@ func listenTCPWithFallback(preferredAddr string, fallbackPorts []int, logFn func
 		if err == nil {
 			actualAddr := ln.Addr().String()
 			if p != originalPort && logFn != nil {
-				logFn("WARN", fmt.Sprintf("Local port %s restricted by Windows permissions (WSAEACCES) or busy; automatically switched to %s", preferredAddr, actualAddr))
+				logFn("WARN", "Local port %s restricted by Windows permissions (WSAEACCES) or busy; automatically switched to %s", preferredAddr, actualAddr)
 			}
 			return ln, actualAddr, nil
 		}
