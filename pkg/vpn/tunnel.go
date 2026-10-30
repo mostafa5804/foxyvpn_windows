@@ -192,8 +192,8 @@ func (e *Engine) Start(ctx context.Context, cfg TunnelConfig) error {
 	e.session = sess
 	e.mu.Unlock()
 
-	// Start local SOCKS5 listener
-	socksLn, err := net.Listen("tcp", cfg.SocksListen)
+	// Start local SOCKS5 listener with automatic fallback if port is blocked by Windows
+	socksLn, actualSocksAddr, err := listenTCPWithFallback(cfg.SocksListen, []int{10808, 1081, 1082, 1085, 20808}, e.log)
 	if err != nil {
 		_ = sess.Close()
 		e.mu.Lock()
@@ -201,12 +201,13 @@ func (e *Engine) Start(ctx context.Context, cfg TunnelConfig) error {
 		e.mu.Unlock()
 		return fmt.Errorf("listening on SOCKS5 %s: %w", cfg.SocksListen, err)
 	}
+	cfg.SocksListen = actualSocksAddr
 	e.socksListener = socksLn
 	go e.acceptSOCKS5Loop(socksLn)
-	e.log("INFO", "Local SOCKS5 server listening on %s", cfg.SocksListen)
+	e.log("INFO", "Local SOCKS5 server listening on %s", actualSocksAddr)
 
-	// Start local HTTP CONNECT proxy listener
-	httpLn, err := net.Listen("tcp", cfg.HttpListen)
+	// Start local HTTP CONNECT proxy listener with automatic fallback if port 8080 is restricted
+	httpLn, actualHttpAddr, err := listenTCPWithFallback(cfg.HttpListen, []int{8085, 8081, 8082, 8888, 20880, 28080}, e.log)
 	if err != nil {
 		_ = socksLn.Close()
 		_ = sess.Close()
@@ -216,15 +217,20 @@ func (e *Engine) Start(ctx context.Context, cfg TunnelConfig) error {
 		e.mu.Unlock()
 		return fmt.Errorf("listening on HTTP proxy %s: %w", cfg.HttpListen, err)
 	}
+	cfg.HttpListen = actualHttpAddr
 	e.httpListener = httpLn
 	go e.acceptHTTPProxyLoop(httpLn)
-	e.log("INFO", "Local HTTP CONNECT proxy listening on %s", cfg.HttpListen)
+	e.log("INFO", "Local HTTP CONNECT proxy listening on %s", actualHttpAddr)
 
-	// Enable Windows System Proxy (WinINET -> 127.0.0.1:8080) after saving prior user proxy settings
-	if proxyErr := SetWindowsSystemProxy(cfg.HttpListen); proxyErr != nil {
+	e.mu.Lock()
+	e.cfg = cfg
+	e.mu.Unlock()
+
+	// Enable Windows System Proxy (WinINET -> actualHttpAddr) after saving prior user proxy settings
+	if proxyErr := SetWindowsSystemProxy(actualHttpAddr); proxyErr != nil {
 		e.log("WARN", "Setting Windows WinINET proxy warning: %v", proxyErr)
 	} else {
-		e.log("INFO", "Enabled Windows System Proxy -> %s (SOCKS5 on %s)", cfg.HttpListen, cfg.SocksListen)
+		e.log("INFO", "Enabled Windows System Proxy -> %s (SOCKS5 on %s)", actualHttpAddr, actualSocksAddr)
 	}
 
 	if strings.EqualFold(cfg.Mode, "tun") {
@@ -1157,4 +1163,41 @@ func pipeBidirectional(a, b net.Conn) {
 		done <- struct{}{}
 	}()
 	<-done
+}
+
+// listenTCPWithFallback attempts to bind to preferredAddr. If blocked by Windows
+// (WSAEACCES / Hyper-V or WSL2 excluded port range) or already occupied by another process,
+// it automatically tests fallbackPorts, and finally port 0 (OS-assigned free port)
+// so the tunnel connection never fails due to local port collisions.
+func listenTCPWithFallback(preferredAddr string, fallbackPorts []int, logFn func(level, msg string)) (net.Listener, string, error) {
+	host, portStr, err := net.SplitHostPort(preferredAddr)
+	if err != nil {
+		host = "127.0.0.1"
+		portStr = "0"
+	}
+	var originalPort int
+	fmt.Sscanf(portStr, "%d", &originalPort)
+
+	candidates := []int{originalPort}
+	for _, fp := range fallbackPorts {
+		if fp != originalPort {
+			candidates = append(candidates, fp)
+		}
+	}
+	candidates = append(candidates, 0)
+
+	var lastErr error
+	for _, p := range candidates {
+		addr := fmt.Sprintf("%s:%d", host, p)
+		ln, err := net.Listen("tcp", addr)
+		if err == nil {
+			actualAddr := ln.Addr().String()
+			if p != originalPort && logFn != nil {
+				logFn("WARN", fmt.Sprintf("Local port %s restricted by Windows permissions (WSAEACCES) or busy; automatically switched to %s", preferredAddr, actualAddr))
+			}
+			return ln, actualAddr, nil
+		}
+		lastErr = err
+	}
+	return nil, "", fmt.Errorf("failed to bind to %s or fallback ports: %w", preferredAddr, lastErr)
 }
