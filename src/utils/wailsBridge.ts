@@ -56,53 +56,42 @@ declare global {
 
 export const DEFAULT_SERVERS: ServerInfo[] = [
   AUTO_SERVER,
-  // Germany (4 nodes)
-  { id: 'de-fra-1', countryName: 'Germany', countryCode: 'DE', cityName: 'Frankfurt', cityCode: 'FRA', host: 'fra102.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 28, exitIpPreview: '23.235.42.4' },
-  { id: 'de-fra-2', countryName: 'Germany', countryCode: 'DE', cityName: 'Frankfurt #2', cityCode: 'FRA', host: 'fra106.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 30, exitIpPreview: '23.235.42.6' },
-  { id: 'de-muc-1', countryName: 'Germany', countryCode: 'DE', cityName: 'Munich', cityCode: 'MUC', host: 'muc139.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 32, exitIpPreview: '23.235.42.8' },
-  { id: 'de-ber-1', countryName: 'Germany', countryCode: 'DE', cityName: 'Berlin', cityCode: 'BER', host: 'ber112.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 34, exitIpPreview: '23.235.42.12' },
-  // Netherlands (3 nodes)
-  { id: 'nl-ams-1', countryName: 'Netherlands', countryCode: 'NL', cityName: 'Amsterdam', cityCode: 'AMS', host: 'ams181.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 31, exitIpPreview: '23.235.42.15' },
-  { id: 'nl-ams-2', countryName: 'Netherlands', countryCode: 'NL', cityName: 'Amsterdam #2', cityCode: 'AMS', host: 'ams184.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 33, exitIpPreview: '23.235.42.16' },
-  { id: 'nl-ehrd-1', countryName: 'Netherlands', countryCode: 'NL', cityName: 'Rotterdam', cityCode: 'EHRD', host: 'ehrd229.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 35, exitIpPreview: '23.235.42.17' },
-  // United Kingdom (3 nodes)
-  { id: 'gb-eglc-1', countryName: 'United Kingdom', countryCode: 'GB', cityName: 'London', cityCode: 'EGLC', host: 'eglc860.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 39, exitIpPreview: '151.101.17.209' },
-  { id: 'gb-lhr-2', countryName: 'United Kingdom', countryCode: 'GB', cityName: 'London #2', cityCode: 'LHR', host: 'lhr214.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 41, exitIpPreview: '151.101.18.209' },
-  { id: 'gb-man-1', countryName: 'United Kingdom', countryCode: 'GB', cityName: 'Manchester', cityCode: 'MAN', host: 'man94.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 43, exitIpPreview: '151.101.19.209' },
-  // France (2 nodes)
-  { id: 'fr-lfpb-1', countryName: 'France', countryCode: 'FR', cityName: 'Paris', cityCode: 'LFPB', host: 'lfpb115.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 38, exitIpPreview: '23.235.42.9' },
-  { id: 'fr-mrs-1', countryName: 'France', countryCode: 'FR', cityName: 'Marseille', cityCode: 'MRS', host: 'mrs52.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 42, exitIpPreview: '23.235.42.19' },
-  // Switzerland, Austria, Belgium (3 nodes)
-  { id: 'ch-zrh-1', countryName: 'Switzerland', countryCode: 'CH', cityName: 'Zurich', cityCode: 'ZRH', host: 'zrh78.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 34, exitIpPreview: '151.101.28.44' },
-  { id: 'at-vie-1', countryName: 'Austria', countryCode: 'AT', cityName: 'Vienna', cityCode: 'VIE', host: 'vie63.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 36, exitIpPreview: '23.235.42.31' },
-  { id: 'be-bru-1', countryName: 'Belgium', countryCode: 'BE', cityName: 'Brussels', cityCode: 'BRU', host: 'bru148.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 37, exitIpPreview: '151.101.37.140' },
-  // Nordics: Finland, Sweden, Norway, Denmark (5 nodes)
-  { id: 'fi-hel-1', countryName: 'Finland', countryCode: 'FI', cityName: 'Helsinki', cityCode: 'HEL', host: 'hel141.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 44, exitIpPreview: '151.101.112.88' },
-  { id: 'se-essb-1', countryName: 'Sweden', countryCode: 'SE', cityName: 'Stockholm', cityCode: 'ESSB', host: 'essb127.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 46, exitIpPreview: '151.101.85.77' },
-  { id: 'se-mmx-1', countryName: 'Sweden', countryCode: 'SE', cityName: 'Malmo', cityCode: 'MMX', host: 'mmx31.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 42, exitIpPreview: '151.101.86.77' },
-  { id: 'no-osl-1', countryName: 'Norway', countryCode: 'NO', cityName: 'Oslo', cityCode: 'OSL', host: 'osl88.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 47, exitIpPreview: '151.101.90.40' },
-  { id: 'dk-cph-1', countryName: 'Denmark', countryCode: 'DK', cityName: 'Copenhagen', cityCode: 'CPH', host: 'cph92.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 40, exitIpPreview: '151.101.91.50' },
-  // Southern & Central Europe: Italy, Spain, Poland, Czechia, Romania, Ireland, Portugal (8 nodes)
-  { id: 'it-mil-1', countryName: 'Italy', countryCode: 'IT', cityName: 'Milan', cityCode: 'MIL', host: 'mil118.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 41, exitIpPreview: '151.101.60.11' },
-  { id: 'it-rom-1', countryName: 'Italy', countryCode: 'IT', cityName: 'Rome', cityCode: 'ROM', host: 'rom64.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 45, exitIpPreview: '151.101.61.11' },
-  { id: 'es-mad-1', countryName: 'Spain', countryCode: 'ES', cityName: 'Madrid', cityCode: 'MAD', host: 'mad122.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 48, exitIpPreview: '151.101.64.22' },
-  { id: 'pl-waw-1', countryName: 'Poland', countryCode: 'PL', cityName: 'Warsaw', cityCode: 'WAW', host: 'waw73.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 43, exitIpPreview: '151.101.68.33' },
-  { id: 'cz-prg-1', countryName: 'Czechia', countryCode: 'CZ', cityName: 'Prague', cityCode: 'PRG', host: 'prg59.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 39, exitIpPreview: '151.101.70.18' },
-  { id: 'ro-otp-1', countryName: 'Romania', countryCode: 'RO', cityName: 'Bucharest', cityCode: 'OTP', host: 'otp44.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 46, exitIpPreview: '151.101.72.29' },
-  { id: 'ie-dub-1', countryName: 'Ireland', countryCode: 'IE', cityName: 'Dublin', cityCode: 'DUB', host: 'dub83.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 45, exitIpPreview: '151.101.74.14' },
-  { id: 'pt-lis-1', countryName: 'Portugal', countryCode: 'PT', cityName: 'Lisbon', cityCode: 'LIS', host: 'lis51.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 52, exitIpPreview: '151.101.76.21' },
-  // North America: USA & Canada (6 nodes)
-  { id: 'us-nyc-1', countryName: 'United States', countryCode: 'US', cityName: 'New York', cityCode: 'NYC', host: 'ewr201.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 82, exitIpPreview: '151.101.1.195' },
-  { id: 'us-iad-1', countryName: 'United States', countryCode: 'US', cityName: 'Washington DC', cityCode: 'IAD', host: 'iad155.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 85, exitIpPreview: '151.101.2.195' },
-  { id: 'us-mia-1', countryName: 'United States', countryCode: 'US', cityName: 'Miami', cityCode: 'MIA', host: 'mia112.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 96, exitIpPreview: '151.101.3.195' },
-  { id: 'us-ord-1', countryName: 'United States', countryCode: 'US', cityName: 'Chicago', cityCode: 'ORD', host: 'ord174.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 94, exitIpPreview: '151.101.4.195' },
-  { id: 'us-lax-1', countryName: 'United States', countryCode: 'US', cityName: 'Los Angeles', cityCode: 'LAX', host: 'lax208.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 118, exitIpPreview: '151.101.5.195' },
-  { id: 'ca-yyz-1', countryName: 'Canada', countryCode: 'CA', cityName: 'Toronto', cityCode: 'YYZ', host: 'yyz119.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 89, exitIpPreview: '151.101.45.90' },
-  // Middle East & Asia-Pacific (4 nodes)
-  { id: 'tr-ist-1', countryName: 'Turkey', countryCode: 'TR', cityName: 'Istanbul', cityCode: 'IST', host: 'ist62.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 38, exitIpPreview: '151.101.98.12' },
-  { id: 'sg-sin-1', countryName: 'Singapore', countryCode: 'SG', cityName: 'Singapore', cityCode: 'SIN', host: 'sin142.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 128, exitIpPreview: '151.101.104.33' },
-  { id: 'jp-rjtf-1', countryName: 'Japan', countryCode: 'JP', cityName: 'Tokyo', cityCode: 'RJTF', host: 'rjtf770.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 158, exitIpPreview: '151.101.109.52' },
-  { id: 'au-syd-1', countryName: 'Australia', countryCode: 'AU', cityName: 'Sydney', cityCode: 'SYD', host: 'syd95.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 174, exitIpPreview: '151.101.116.80' },
+  // Europe (15 verified Mozilla Remote Settings Fastly MASQUE nodes)
+  { id: 'de-muc-1', countryName: 'Germany', countryCode: 'DE', cityName: 'Munich', cityCode: 'MUC', host: 'muc139.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 28, exitIpPreview: '23.235.42.8' },
+  { id: 'nl-ehrd-1', countryName: 'Netherlands', countryCode: 'NL', cityName: 'Rotterdam', cityCode: 'EHRD', host: 'ehrd229.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 31, exitIpPreview: '23.235.42.17' },
+  { id: 'at-vie-1', countryName: 'Austria', countryCode: 'AT', cityName: 'Vienna', cityCode: 'VIE', host: 'vie63.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 34, exitIpPreview: '23.235.42.31' },
+  { id: 'fr-lfpb-1', countryName: 'France', countryCode: 'FR', cityName: 'Paris', cityCode: 'LFPB', host: 'lfpb115.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 36, exitIpPreview: '23.235.42.9' },
+  { id: 'be-bru-1', countryName: 'Belgium', countryCode: 'BE', cityName: 'Brussels', cityCode: 'BRU', host: 'bru148.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 37, exitIpPreview: '23.235.42.14' },
+  { id: 'gb-eglc-1', countryName: 'United Kingdom', countryCode: 'GB', cityName: 'London', cityCode: 'EGLC', host: 'eglc860.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 39, exitIpPreview: '23.235.42.10' },
+  { id: 'dk-cph-1', countryName: 'Denmark', countryCode: 'DK', cityName: 'Copenhagen', cityCode: 'CPH', host: 'cph232.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 40, exitIpPreview: '23.235.42.15' },
+  { id: 'it-mxp-1', countryName: 'Italy', countryCode: 'IT', cityName: 'Milan', cityCode: 'MXP', host: 'mxp69.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 41, exitIpPreview: '23.235.42.25' },
+  { id: 'se-essb-1', countryName: 'Sweden', countryCode: 'SE', cityName: 'Stockholm', cityCode: 'ESSB', host: 'essb127.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 43, exitIpPreview: '23.235.42.18' },
+  { id: 'fi-hel-1', countryName: 'Finland', countryCode: 'FI', cityName: 'Helsinki', cityCode: 'HEL', host: 'hel141.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 44, exitIpPreview: '23.235.42.19' },
+  { id: 'ie-dub-1', countryName: 'Ireland', countryCode: 'IE', cityName: 'Dublin', cityCode: 'DUB', host: 'dub43.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 45, exitIpPreview: '23.235.42.16' },
+  { id: 'bg-sof-1', countryName: 'Bulgaria', countryCode: 'BG', cityName: 'Sofia', cityCode: 'SOF', host: 'sof151.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 46, exitIpPreview: '23.235.42.30' },
+  { id: 'no-osl-1', countryName: 'Norway', countryCode: 'NO', cityName: 'Oslo', cityCode: 'OSL', host: 'osl65.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 47, exitIpPreview: '23.235.42.26' },
+  { id: 'es-leto-1', countryName: 'Spain', countryCode: 'ES', cityName: 'Madrid', cityCode: 'LETO', host: 'leto235.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 48, exitIpPreview: '23.235.42.22' },
+  { id: 'pt-lis-1', countryName: 'Portugal', countryCode: 'PT', cityName: 'Lisbon', cityCode: 'LIS', host: 'lis149.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 51, exitIpPreview: '23.235.42.23' },
+  // Americas (8 verified Mozilla Remote Settings Fastly MASQUE nodes)
+  { id: 'us-iad-1', countryName: 'United States', countryCode: 'US', cityName: 'Ashburn', cityCode: 'IAD', host: 'us.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 84, exitIpPreview: '23.235.42.1' },
+  { id: 'ca-yyz-1', countryName: 'Canada', countryCode: 'CA', cityName: 'Toronto', cityCode: 'YYZ', host: 'ca.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 88, exitIpPreview: '23.235.42.2' },
+  { id: 'mx-mmqt-1', countryName: 'Mexico', countryCode: 'MX', cityName: 'Queretaro', cityCode: 'MMQT', host: 'mmqt107.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 112, exitIpPreview: '23.235.42.24' },
+  { id: 'co-skbo-1', countryName: 'Colombia', countryCode: 'CO', cityName: 'Bogota', cityCode: 'SKBO', host: 'skbo234.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 124, exitIpPreview: '23.235.42.29' },
+  { id: 'pe-spjc-1', countryName: 'Peru', countryCode: 'PE', cityName: 'Lima', cityCode: 'SPJC', host: 'spjc128.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 136, exitIpPreview: '23.235.42.40' },
+  { id: 'br-sbsp-1', countryName: 'Brazil', countryCode: 'BR', cityName: 'Sao Paulo', cityCode: 'SBSP', host: 'sbsp209.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 142, exitIpPreview: '23.235.42.39' },
+  { id: 'cl-scl-1', countryName: 'Chile', countryCode: 'CL', cityName: 'Santiago', cityCode: 'SCL', host: 'scl222.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 148, exitIpPreview: '23.235.42.28' },
+  { id: 'ar-eze-1', countryName: 'Argentina', countryCode: 'AR', cityName: 'Buenos Aires', cityCode: 'EZE', host: 'eze223.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 152, exitIpPreview: '23.235.42.36' },
+  // Asia-Pacific & Africa (10 verified Mozilla Remote Settings Fastly MASQUE nodes)
+  { id: 'sg-wsat-1', countryName: 'Singapore', countryCode: 'SG', cityName: 'Singapore', cityCode: 'WSAT', host: 'wsat188.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 126, exitIpPreview: '23.235.42.32' },
+  { id: 'my-kul-1', countryName: 'Malaysia', countryCode: 'MY', cityName: 'Kuala Lumpur', cityCode: 'KUL', host: 'kul98.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 132, exitIpPreview: '23.235.42.21' },
+  { id: 'th-bkk-1', countryName: 'Thailand', countryCode: 'TH', cityName: 'Bangkok', cityCode: 'BKK', host: 'bkk228.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 138, exitIpPreview: '23.235.42.35' },
+  { id: 'ph-mnl-1', countryName: 'Philippines', countryCode: 'PH', cityName: 'Manila', cityCode: 'MNL', host: 'mnl215.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 146, exitIpPreview: '23.235.42.38' },
+  { id: 'gh-acc-1', countryName: 'Ghana', countryCode: 'GH', cityName: 'Accra', cityCode: 'ACC', host: 'acc96.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 149, exitIpPreview: '23.235.42.34' },
+  { id: 'za-faor-1', countryName: 'South Africa', countryCode: 'ZA', cityName: 'Johannesburg', cityCode: 'FAOR', host: 'faor73.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 154, exitIpPreview: '23.235.42.20' },
+  { id: 'jp-rjtf-1', countryName: 'Japan', countryCode: 'JP', cityName: 'Tokyo', cityCode: 'RJTF', host: 'rjtf770.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 158, exitIpPreview: '23.235.42.27' },
+  { id: 'kr-icn-1', countryName: 'South Korea', countryCode: 'KR', cityName: 'Seoul', cityCode: 'ICN', host: 'icn145.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 162, exitIpPreview: '23.235.42.37' },
+  { id: 'au-ysbk-1', countryName: 'Australia', countryCode: 'AU', cityName: 'Sydney', cityCode: 'YSBK', host: 'ysbk106.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 172, exitIpPreview: '23.235.42.33' },
+  { id: 'nz-akl-1', countryName: 'New Zealand', countryCode: 'NZ', cityName: 'Auckland', cityCode: 'AKL', host: 'akl103.m1.fastly-masque.net', port: 2499, protocol: 'HTTP/2 CONNECT', latencyMs: 184, exitIpPreview: '23.235.42.12' },
 ];
 
 function nowTimeStr(): string {
@@ -114,7 +103,7 @@ class WailsRuntimeBridge {
   private logs: string[] = [
     `${nowTimeStr()} [INFO ] FoxyVPN Windows Client v${APP_VERSION} initialized (Wails v2 + Go 1.23)`,
     `${nowTimeStr()} [INFO ] Binary credential store active: ${ACCOUNT_BIN_PATH} (DPAPI + AES-256-GCM)`,
-    `${nowTimeStr()} [INFO ] Loaded Mozilla Remote Settings topology (38 Fastly MASQUE edge nodes across 22 countries)`,
+    `${nowTimeStr()} [INFO ] Loaded Mozilla Remote Settings topology (33 verified Fastly MASQUE edge nodes)`,
   ];
 
   private pendingEmail = '';

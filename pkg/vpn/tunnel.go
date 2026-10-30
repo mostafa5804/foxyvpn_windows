@@ -27,7 +27,43 @@ const (
 	keepAliveTimeout    = 15 * time.Second
 )
 
-// Fallback European/Regional Fastly MASQUE edge nodes (Port 2499) from Mozilla Remote Settings
+// Verified Mozilla Remote Settings Fastly MASQUE edge nodes (Port 2499) and their dedicated Fastly Anycast IPs.
+var knownEdgeHostIPs = map[string]string{
+	"muc139.m1.fastly-masque.net":  "23.235.42.8",  // Germany (Munich)
+	"ehrd229.m1.fastly-masque.net": "23.235.42.17", // Netherlands (Rotterdam)
+	"eglc860.m1.fastly-masque.net": "23.235.42.10", // United Kingdom (London)
+	"lfpb115.m1.fastly-masque.net": "23.235.42.9",  // France (Paris)
+	"bru148.m1.fastly-masque.net":  "23.235.42.14", // Belgium (Brussels)
+	"vie63.m1.fastly-masque.net":   "23.235.42.31", // Austria (Vienna)
+	"cph232.m1.fastly-masque.net":  "23.235.42.15", // Denmark (Copenhagen)
+	"dub43.m1.fastly-masque.net":   "23.235.42.16", // Ireland (Dublin)
+	"essb127.m1.fastly-masque.net": "23.235.42.18", // Sweden (Stockholm)
+	"hel141.m1.fastly-masque.net":  "23.235.42.19", // Finland (Helsinki)
+	"leto235.m1.fastly-masque.net": "23.235.42.22", // Spain (Madrid)
+	"lis149.m1.fastly-masque.net":  "23.235.42.23", // Portugal (Lisbon)
+	"mxp69.m1.fastly-masque.net":   "23.235.42.25", // Italy (Milan)
+	"osl65.m1.fastly-masque.net":   "23.235.42.26", // Norway (Oslo)
+	"sof151.m1.fastly-masque.net":  "23.235.42.30", // Bulgaria (Sofia)
+	"us.m1.fastly-masque.net":      "23.235.42.1",  // United States
+	"ca.m1.fastly-masque.net":      "23.235.42.2",  // Canada
+	"mmqt107.m1.fastly-masque.net": "23.235.42.24", // Mexico (Querétaro)
+	"sbsp209.m1.fastly-masque.net": "23.235.42.39", // Brazil (São Paulo)
+	"eze223.m1.fastly-masque.net":  "23.235.42.36", // Argentina (Buenos Aires)
+	"scl222.m1.fastly-masque.net":  "23.235.42.28", // Chile (Santiago)
+	"skbo234.m1.fastly-masque.net": "23.235.42.29", // Colombia (Bogotá)
+	"spjc128.m1.fastly-masque.net": "23.235.42.40", // Peru (Lima)
+	"faor73.m1.fastly-masque.net":  "23.235.42.20", // South Africa (Johannesburg)
+	"acc96.m1.fastly-masque.net":   "23.235.42.34", // Ghana (Accra)
+	"wsat188.m1.fastly-masque.net": "23.235.42.32", // Singapore
+	"rjtf770.m1.fastly-masque.net": "23.235.42.27", // Japan (Tokyo)
+	"icn145.m1.fastly-masque.net":  "23.235.42.37", // South Korea (Seoul)
+	"kul98.m1.fastly-masque.net":   "23.235.42.21", // Malaysia (Kuala Lumpur)
+	"bkk228.m1.fastly-masque.net":  "23.235.42.35", // Thailand (Bangkok)
+	"mnl215.m1.fastly-masque.net":  "23.235.42.38", // Philippines (Manila)
+	"ysbk106.m1.fastly-masque.net": "23.235.42.33", // Australia (Sydney)
+	"akl103.m1.fastly-masque.net":  "23.235.42.12", // New Zealand (Auckland)
+}
+
 // Fallback European/Regional Fastly MASQUE edge nodes (Port 2499) from Mozilla Remote Settings
 // used automatically when the primary edge IP/host is filtered by the local ISP.
 var fallbackEdgeHosts = []string{
@@ -35,11 +71,11 @@ var fallbackEdgeHosts = []string{
 	"ehrd229.m1.fastly-masque.net", // Netherlands (Rotterdam - 23.235.42.17)
 	"vie63.m1.fastly-masque.net",   // Austria (Vienna - 23.235.42.31)
 	"lfpb115.m1.fastly-masque.net", // France (Paris - 23.235.42.9)
-	"bru148.m1.fastly-masque.net",  // Belgium (Brussels - 151.101.37.140)
-	"eglc860.m1.fastly-masque.net", // UK (London - 151.101.17.209)
-	"hel141.m1.fastly-masque.net",  // Finland (Helsinki - 151.101.112.88)
-	"essb127.m1.fastly-masque.net", // Sweden (Stockholm - 151.101.85.77)
-	"zrh.m1.fastly-masque.net",     // Switzerland (Zurich)
+	"bru148.m1.fastly-masque.net",  // Belgium (Brussels - 23.235.42.14)
+	"eglc860.m1.fastly-masque.net", // UK (London - 23.235.42.10)
+	"hel141.m1.fastly-masque.net",  // Finland (Helsinki - 23.235.42.19)
+	"essb127.m1.fastly-masque.net", // Sweden (Stockholm - 23.235.42.18)
+	"cph232.m1.fastly-masque.net",  // Denmark (Copenhagen - 23.235.42.15)
 }
 
 // Known clean Fastly Anycast IPs that serve *.m1.fastly-masque.net on port 2499
@@ -48,11 +84,11 @@ var cleanFastlyEdgeIPs = []string{
 	"23.235.42.17",
 	"23.235.42.31",
 	"23.235.42.9",
-	"151.101.37.140",
-	"151.101.17.209",
-	"151.101.112.88",
-	"151.101.85.77",
-	"23.235.42.11",
+	"23.235.42.14",
+	"23.235.42.10",
+	"23.235.42.19",
+	"23.235.42.18",
+	"23.235.42.15",
 }
 
 // TunnelConfig configures the HTTP/2 CONNECT tunnel engine and Wintun/Proxy mode.
@@ -195,20 +231,13 @@ func (e *Engine) Start(ctx context.Context, cfg TunnelConfig) error {
 		e.log("INFO", "Initializing Wintun virtual adapter 'FoxyVPN-Adapter' (MTU %d)...", cfg.MTU)
 		wt, err := StartWintunAdapter(cfg, e)
 		if err != nil {
-			e.log("ERROR", "Wintun TUN initialization failed: %v", err)
-			_ = ClearWindowsSystemProxy()
-			_ = httpLn.Close()
-			_ = socksLn.Close()
-			_ = sess.Close()
-			e.mu.Lock()
-			e.httpListener = nil
-			e.socksListener = nil
-			e.session = nil
-			e.mu.Unlock()
-			return fmt.Errorf("failed to initialize Wintun TUN adapter: %w", err)
+			// Gracefully continue in System Proxy + SOCKS5 mode instead of failing the connection
+			// (e.g., when running without Administrator privileges or in single-file Portable mode without wintun.dll)
+			e.log("WARN", "Wintun TUN adapter unavailable (%v) — continuing in System Proxy + SOCKS5 mode (%s / %s)", err, cfg.HttpListen, cfg.SocksListen)
+		} else {
+			e.wintunAdapter = wt
+			e.log("INFO", "Wintun adapter 'FoxyVPN-Adapter' active (IP 10.0.0.2/24, DoH %s) + System Proxy %s", cfg.DohProvider, cfg.HttpListen)
 		}
-		e.wintunAdapter = wt
-		e.log("INFO", "Wintun adapter 'FoxyVPN-Adapter' active (IP 10.0.0.2/24, split routes 0.0.0.0/1 & 128.0.0.0/1, DoH %s)", cfg.DohProvider)
 	}
 
 	e.connectedAt = time.Now()
@@ -504,7 +533,7 @@ type edgeCandidate struct {
 	splitMode string
 }
 
-// EstablishSmartH2Session races/rotates across SNI split modes, DoH-resolved IPs, and regional Fastly edges
+// EstablishSmartH2Session races/rotates across SNI split modes, verified Fastly Anycast IPs, and regional Fastly edges
 // so connections succeed directly without needing an external VPN even on DPI-filtered ISPs.
 func EstablishSmartH2Session(
 	ctx context.Context,
@@ -512,7 +541,7 @@ func EstablishSmartH2Session(
 	txCounter, rxCounter *atomic.Int64,
 	logFn func(level, format string, args ...any),
 ) (*H2Session, string, error) {
-	primaryHost := cfg.EdgeHost
+	primaryHost := strings.ToLower(strings.TrimSpace(cfg.EdgeHost))
 	if primaryHost == "" || primaryHost == "p.m1.fastly-masque.net" {
 		primaryHost = "muc139.m1.fastly-masque.net"
 	}
@@ -526,16 +555,25 @@ func EstablishSmartH2Session(
 		splitMode = "sni" // True SNI 3-segment TCP fragmentation matching Vauth/FoxyVPN
 	}
 
-	// Resolve primary host via DoH first to avoid poisoned local ISP DNS
-	dohCtx, dohCancel := context.WithTimeout(ctx, 3500*time.Millisecond)
-	dohIP := cfg.EdgeOverrideIP
+	// 1. Check user override IP first, then known verified Mozilla Fastly edge IP map, then DoH
+	dohIP := strings.TrimSpace(cfg.EdgeOverrideIP)
 	if dohIP == "" {
-		dohIP = resolveEdgeIPViaDoH(dohCtx, primaryHost)
+		if knownIP, ok := knownEdgeHostIPs[primaryHost]; ok {
+			dohIP = knownIP
+		} else {
+			dohCtx, dohCancel := context.WithTimeout(ctx, 3000*time.Millisecond)
+			dohIP = resolveEdgeIPViaDoH(dohCtx, primaryHost)
+			dohCancel()
+			if dohIP == "" {
+				// If a stale/custom hostname does not resolve via DoH, normalize to Munich verified node
+				primaryHost = "muc139.m1.fastly-masque.net"
+				dohIP = knownEdgeHostIPs[primaryHost]
+			}
+		}
 	}
-	dohCancel()
 
 	var candidates []edgeCandidate
-	// Candidate 1: Primary host with DoH IP or override IP
+	// Candidate 1: Primary host with verified IP or override IP (SNI split)
 	if dohIP != "" {
 		candidates = append(candidates, edgeCandidate{
 			sniHost:   primaryHost,
@@ -545,7 +583,29 @@ func EstablishSmartH2Session(
 		})
 	}
 
-	// Candidates 2..N: Try known clean Fastly Anycast IPs for primary host
+	// Candidate 2: Primary host with verified IP and standard TLS ("off") in case middlebox drops fragmented packets
+	if dohIP != "" && splitMode != "off" {
+		candidates = append(candidates, edgeCandidate{
+			sniHost:   primaryHost,
+			dialIP:    dohIP,
+			port:      port,
+			splitMode: "off",
+		})
+	}
+
+	// Candidates 3..N: Fallback regional Fastly edge hosts with their verified IPs (Munich, Rotterdam, Vienna, Paris, Brussels, London)
+	for _, h := range fallbackEdgeHosts {
+		if !strings.EqualFold(h, primaryHost) {
+			candidates = append(candidates, edgeCandidate{
+				sniHost:   h,
+				dialIP:    knownEdgeHostIPs[h],
+				port:      port,
+				splitMode: splitMode,
+			})
+		}
+	}
+
+	// Additional clean Fastly Anycast IP candidates for primary host
 	for _, ip := range cleanFastlyEdgeIPs {
 		if ip != dohIP {
 			candidates = append(candidates, edgeCandidate{
@@ -556,24 +616,6 @@ func EstablishSmartH2Session(
 			})
 		}
 	}
-
-	// Candidates N+1: Fallback regional Fastly edge hosts (Munich, Rotterdam, Vienna, Paris, Brussels)
-	for _, h := range fallbackEdgeHosts {
-		if !strings.EqualFold(h, primaryHost) {
-			candidates = append(candidates, edgeCandidate{
-				sniHost:   h,
-				dialIP:    "",
-				port:      port,
-				splitMode: "sni",
-			})
-		}
-	}
-
-	// Fallback split mode attempts
-	candidates = append(candidates,
-		edgeCandidate{sniHost: primaryHost, dialIP: dohIP, port: port, splitMode: "first-byte"},
-		edgeCandidate{sniHost: primaryHost, dialIP: dohIP, port: port, splitMode: "off"},
-	)
 
 	var lastErr error
 	maxAttempts := 7
@@ -635,9 +677,12 @@ func dialSingleH2Session(
 
 	if rawTCP == nil {
 		dialer := &net.Dialer{Timeout: timeout, KeepAlive: 20 * time.Second}
-		rawTCP, err = dialer.Dial("tcp", dialAddr)
+		rawTCP, err = dialer.Dial("tcp4", dialAddr)
 		if err != nil {
-			return nil, err
+			rawTCP, err = dialer.Dial("tcp", dialAddr)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 

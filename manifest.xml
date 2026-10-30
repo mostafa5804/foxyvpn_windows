@@ -3,7 +3,7 @@
   <assemblyIdentity
     type="win32"
     name="com.mostafa5804.foxyvpn.windows"
-    version="1.0.6.0"
+    version="1.0.7.0"
     processorArchitecture="amd64"
   />
   <description>FoxyVPN Windows Desktop Client (Wintun &amp; Mozilla Guardian)</description>
@@ -22,7 +22,7 @@
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>
-        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
       </requestedPrivileges>
     </security>
   </trustInfo>

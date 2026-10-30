@@ -206,7 +206,7 @@ export interface Translations {
 export const translations: Record<Language, Translations> = {
   fa: {
     appName: 'FoxyVPN Windows',
-    version: '1.0.6',
+    version: '1.0.7',
     dashboard: 'داشبورد',
     auth: 'اکانت و ورود',
     settings: 'تنظیمات تونل',
@@ -401,7 +401,7 @@ export const translations: Record<Language, Translations> = {
   },
   en: {
     appName: 'FoxyVPN Windows',
-    version: '1.0.6',
+    version: '1.0.7',
     dashboard: 'Dashboard',
     auth: 'Account',
     settings: 'Tunnel Settings',

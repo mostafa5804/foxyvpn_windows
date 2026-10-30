@@ -17,7 +17,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/http/cookiejar"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -33,13 +32,15 @@ import (
 )
 
 const (
+	FxaWebOrigin            = "https://accounts.firefox.com"
 	FxaAuthServer           = "https://api.accounts.firefox.com/v1"
+	FxaOAuthServer          = "https://oauth.accounts.firefox.com/v1"
 	FirefoxClientID         = "5882386c6d801776"
 	OAuthScope              = "profile https://identity.mozilla.com/apps/vpn"
 	GuardianEndpointDefault = "https://vpn.mozilla.org"
 	RemoteSettingsURL       = "https://firefox.settings.services.mozilla.com/v1/buckets/main/collections/vpn-serverlist/records"
 	MozillaVPNUserAgent     = "MozillaVPN/2.35.0 (sys:windows; iap:true)"
-	SolverUserAgent         = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:135.0) Gecko/20100101 Firefox/135.0"
+	SolverUserAgent         = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
 	protocolVersion            = "identity.mozilla.com/picl/v1/"
 	pbkdf2Rounds               = 1000
@@ -66,6 +67,48 @@ var (
 	initCallRegex        = regexp.MustCompile(`init\(\s*(\[[\s\S]*?\])\s*,\s*["']([^"']+)["']`)
 	powAlphabet          = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 )
+
+// SimpleCookieJar shares Fastly clearance cookies (_fs_ch_cp_*, _fs_ch_st_*) across
+// accounts.firefox.com, api.accounts.firefox.com, and oauth.accounts.firefox.com.
+type SimpleCookieJar struct {
+	mu      sync.RWMutex
+	cookies map[string]*http.Cookie
+}
+
+func NewSimpleCookieJar() *SimpleCookieJar {
+	return &SimpleCookieJar{
+		cookies: make(map[string]*http.Cookie),
+	}
+}
+
+func (j *SimpleCookieJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
+	if len(cookies) == 0 {
+		return
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	for _, c := range cookies {
+		if c == nil || c.Name == "" {
+			continue
+		}
+		cp := *c
+		cp.Path = "/"
+		if cp.Domain == "" && u != nil && strings.HasSuffix(strings.ToLower(u.Hostname()), "firefox.com") {
+			cp.Domain = "firefox.com"
+		}
+		j.cookies[cp.Name] = &cp
+	}
+}
+
+func (j *SimpleCookieJar) Cookies(u *url.URL) []*http.Cookie {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	out := make([]*http.Cookie, 0, len(j.cookies))
+	for _, c := range j.cookies {
+		out = append(out, c)
+	}
+	return out
+}
 
 // LoginResponse represents the FxA /account/login or /account/create response.
 type LoginResponse struct {
@@ -177,11 +220,11 @@ type Country struct {
 
 // FxaAPIError wraps an error response from Firefox Accounts API.
 type FxaAPIError struct {
-	Status  int    `json:"status"`
-	Code    int    `json:"code"`
-	Errno   int    `json:"errno"`
+	Status   int    `json:"status"`
+	Code     int    `json:"code"`
+	Errno    int    `json:"errno"`
 	ErrorMsg string `json:"error"`
-	Message string `json:"message"`
+	Message  string `json:"message"`
 }
 
 func (e *FxaAPIError) Error() string {
@@ -193,15 +236,16 @@ func (e *FxaAPIError) Error() string {
 
 // GuardianService manages FxA authentication, Fastly challenge solving, Guardian tokens, and Server lists.
 type GuardianService struct {
-	mu              sync.RWMutex
-	httpClient      *http.Client
-	cookieJar       http.CookieJar
-	guardianBaseURL string
-	pendingSession  *pendingVerification
-	savedTokens     *SavedTokens
-	tokenPool       []string
-	poolIndex       int
-	logFunc         func(level, msg string)
+	mu               sync.RWMutex
+	httpClient       *http.Client
+	cookieJar        http.CookieJar
+	guardianBaseURL  string
+	pendingSession   *pendingVerification
+	savedTokens      *SavedTokens
+	tokenPool        []string
+	poolIndex        int
+	pinnedFirefoxIP  string
+	logFunc          func(level, msg string)
 }
 
 type pendingVerification struct {
@@ -211,21 +255,62 @@ type pendingVerification struct {
 	IsSignUp     bool
 }
 
-// NewGuardianService creates a configured authentication & Guardian service.
-func NewGuardianService(logFn func(level, msg string)) *GuardianService {
-	jar, _ := cookiejar.New(nil)
-	client := &http.Client{
-		Timeout: controlPlaneHTTPTimeout,
-		Jar:     jar,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+// newDirectTransport creates an HTTP/2-enabled transport that pins a consistent IPv4 Fastly POP
+// across accounts.firefox.com, api.accounts.firefox.com, and oauth.accounts.firefox.com so
+// Fastly's POP-bound _fs_ch_cp_* clearance cookie is never invalidated by IPv6/IPv4 or POP switching.
+func (g *GuardianService) newDirectTransport() *http.Transport {
+	baseDialer := &net.Dialer{
+		Timeout:   20 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+	return &http.Transport{
+		ForceAttemptHTTP2:   true,
+		MaxIdleConns:        32,
+		IdleConnTimeout:     60 * time.Second,
+		TLSHandshakeTimeout: 15 * time.Second,
+		TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, port, splitErr := net.SplitHostPort(addr)
+			if splitErr == nil && strings.HasSuffix(strings.ToLower(host), "firefox.com") {
+				g.mu.RLock()
+				pinned := g.pinnedFirefoxIP
+				g.mu.RUnlock()
+
+				if pinned == "" {
+					if ips, err := net.DefaultResolver.LookupIP(ctx, "ip4", "accounts.firefox.com"); err == nil && len(ips) > 0 {
+						pinned = ips[0].String()
+					} else {
+						pinned = "151.101.1.91"
+					}
+					g.mu.Lock()
+					g.pinnedFirefoxIP = pinned
+					g.mu.Unlock()
+				}
+				if conn, err := baseDialer.DialContext(ctx, "tcp4", net.JoinHostPort(pinned, port)); err == nil {
+					return conn, nil
+				}
+			}
+			// Prefer IPv4 so client IP remains consistent across requests
+			if conn, err := baseDialer.DialContext(ctx, "tcp4", addr); err == nil {
+				return conn, nil
+			}
+			return baseDialer.DialContext(ctx, network, addr)
 		},
 	}
+}
+
+// NewGuardianService creates a configured authentication & Guardian service.
+func NewGuardianService(logFn func(level, msg string)) *GuardianService {
+	jar := NewSimpleCookieJar()
 	svc := &GuardianService{
-		httpClient:      client,
 		cookieJar:       jar,
 		guardianBaseURL: GuardianEndpointDefault,
 		logFunc:         logFn,
+	}
+	svc.httpClient = &http.Client{
+		Timeout:   controlPlaneHTTPTimeout,
+		Jar:       jar,
+		Transport: svc.newDirectTransport(),
 	}
 	if saved, err := svc.LoadTokens(); err == nil {
 		svc.savedTokens = saved
@@ -246,9 +331,7 @@ func (g *GuardianService) SetControlPlaneProxy(rawProxyURL string) error {
 
 	rawProxyURL = strings.TrimSpace(rawProxyURL)
 	if rawProxyURL == "" {
-		g.httpClient.Transport = &http.Transport{
-			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
-		}
+		g.httpClient.Transport = g.newDirectTransport()
 		g.log("INFO", "Control-plane proxy cleared (using direct connection)")
 		return nil
 	}
@@ -260,9 +343,10 @@ func (g *GuardianService) SetControlPlaneProxy(rawProxyURL string) error {
 		return fmt.Errorf("invalid proxy URL: %w", err)
 	}
 
-	dialer := &net.Dialer{Timeout: 20 * time.Second}
+	dialer := &net.Dialer{Timeout: 20 * time.Second, KeepAlive: 30 * time.Second}
 	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+		ForceAttemptHTTP2: true,
+		TLSClientConfig:   &tls.Config{MinVersion: tls.VersionTLS12},
 	}
 
 	switch strings.ToLower(parsed.Scheme) {
@@ -382,9 +466,12 @@ func applyMozillaHeaders(req *http.Request) {
 	req.Header.Set("User-Agent", SolverUserAgent)
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Sec-Ch-Ua", `"Chromium";v="131", "Not_A Brand";v="24"`)
+	req.Header.Set("Sec-Ch-Ua-Mobile", "?0")
+	req.Header.Set("Sec-Ch-Ua-Platform", `"Windows"`)
 	if req.URL != nil && strings.Contains(strings.ToLower(req.URL.Host), "firefox.com") {
-		req.Header.Set("Origin", "https://accounts.firefox.com")
-		req.Header.Set("Referer", "https://accounts.firefox.com/")
+		req.Header.Set("Origin", FxaWebOrigin)
+		req.Header.Set("Referer", FxaWebOrigin+"/")
 		req.Header.Set("Sec-Fetch-Dest", "empty")
 		req.Header.Set("Sec-Fetch-Mode", "cors")
 		req.Header.Set("Sec-Fetch-Site", "same-site")
@@ -400,13 +487,7 @@ func (g *GuardianService) promoteCookiesToRoot(rawURL string, cookies []*http.Co
 		return
 	}
 	rootURL := &url.URL{Scheme: u.Scheme, Host: u.Host, Path: "/"}
-	var promoted []*http.Cookie
-	for _, c := range cookies {
-		cp := *c
-		cp.Path = "/"
-		promoted = append(promoted, &cp)
-	}
-	g.cookieJar.SetCookies(rootURL, promoted)
+	g.cookieJar.SetCookies(rootURL, cookies)
 }
 
 // doWithChallenge executes an HTTP request and transparently solves Fastly HTTP 406 challenges.
@@ -430,6 +511,16 @@ func (g *GuardianService) doWithChallenge(ctx context.Context, buildReq func() (
 		g.log("WARN", "Fastly anti-bot challenge triggered (HTTP 406), solving challenge (attempt %d/%d)...", attempt, maxChallengeAttempts)
 		if solveErr := g.solveFastlyChallenge(ctx, req.URL.String(), string(challengeBytes)); solveErr != nil {
 			g.log("WARN", "Fastly challenge solver warning: %v", solveErr)
+			// Rotate pinned IPv4 candidate if challenge fails after attempt 3
+			if attempt == 3 {
+				g.mu.Lock()
+				if g.pinnedFirefoxIP == "151.101.1.91" {
+					g.pinnedFirefoxIP = "151.101.65.91"
+				} else {
+					g.pinnedFirefoxIP = "151.101.1.91"
+				}
+				g.mu.Unlock()
+			}
 		}
 		if attempt < maxChallengeAttempts {
 			select {
@@ -443,48 +534,64 @@ func (g *GuardianService) doWithChallenge(ctx context.Context, buildReq func() (
 }
 
 // solveFastlyChallenge implements the Fastly PoW/PAT/ClientMetrics challenge solver.
+// When api.accounts.firefox.com returns an empty 406 body, it probes https://accounts.firefox.com/
+// on the same pinned Fastly POP, solves PoW + PAT + ClientMetrics, and stores the Domain=firefox.com
+// clearance cookie (_fs_ch_cp_*) in SimpleCookieJar for api.accounts.firefox.com.
 func (g *GuardianService) solveFastlyChallenge(ctx context.Context, targetURL string, initialPage string) error {
 	u, err := url.Parse(targetURL)
 	if err != nil {
 		return err
 	}
 	baseHost := u.Scheme + "://" + u.Host
+	challengeOrigin := baseHost
 	page := initialPage
 
-	// If the 406 response body did not embed the /_fs-ch- challenge HTML directly, probe targetURL and baseHost
+	// api.accounts.firefox.com returns an empty-body 406; the actual /_fs-ch- challenge page is served on https://accounts.firefox.com/
 	if !strings.Contains(page, "/_fs-ch-") {
-		for _, probeURL := range []string{targetURL, baseHost + "/"} {
-			req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+		probes := []struct {
+			probeURL string
+			origin   string
+		}{
+			{FxaWebOrigin + "/", FxaWebOrigin},
+			{targetURL, baseHost},
+			{baseHost + "/", baseHost},
+		}
+		for _, p := range probes {
+			req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, p.probeURL, nil)
 			if reqErr != nil {
 				continue
 			}
 			req.Header.Set("User-Agent", SolverUserAgent)
 			req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 			req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+			req.Header.Set("Sec-Ch-Ua", `"Chromium";v="131", "Not_A Brand";v="24"`)
+			req.Header.Set("Sec-Ch-Ua-Mobile", "?0")
+			req.Header.Set("Sec-Ch-Ua-Platform", `"Windows"`)
 
 			resp, doErr := g.httpClient.Do(req)
 			if doErr != nil {
 				continue
 			}
-			g.promoteCookiesToRoot(probeURL, resp.Cookies())
+			g.promoteCookiesToRoot(p.probeURL, resp.Cookies())
 			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
 			_ = resp.Body.Close()
 			if strings.Contains(string(bodyBytes), "/_fs-ch-") {
 				page = string(bodyBytes)
+				challengeOrigin = p.origin
 				break
 			}
 		}
 	}
 
 	if !strings.Contains(page, "/_fs-ch-") {
-		return errors.New("Fastly challenge prefix not found in 406 response or host root")
+		return errors.New("Fastly challenge prefix not found in 406 response or accounts.firefox.com")
 	}
 	prefix := challengePrefixRegex.FindString(page)
 	prefix = strings.TrimSuffix(prefix, "/script.js")
 	if prefix == "" {
 		return errors.New("Fastly challenge prefix regex did not match")
 	}
-	prefixURL := baseHost + prefix
+	prefixURL := challengeOrigin + prefix
 
 	scriptReq, err := http.NewRequestWithContext(ctx, http.MethodGet, prefixURL+"/script.js?reload=true", nil)
 	if err != nil {
@@ -493,7 +600,10 @@ func (g *GuardianService) solveFastlyChallenge(ctx context.Context, targetURL st
 	scriptReq.Header.Set("User-Agent", SolverUserAgent)
 	scriptReq.Header.Set("Accept", "*/*")
 	scriptReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	scriptReq.Header.Set("Referer", targetURL)
+	scriptReq.Header.Set("Referer", challengeOrigin+"/")
+	scriptReq.Header.Set("Sec-Ch-Ua", `"Chromium";v="131", "Not_A Brand";v="24"`)
+	scriptReq.Header.Set("Sec-Ch-Ua-Mobile", "?0")
+	scriptReq.Header.Set("Sec-Ch-Ua-Platform", `"Windows"`)
 	scriptReq.Header.Set("Sec-Fetch-Dest", "script")
 	scriptReq.Header.Set("Sec-Fetch-Mode", "no-cors")
 	scriptReq.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -502,7 +612,7 @@ func (g *GuardianService) solveFastlyChallenge(ctx context.Context, targetURL st
 	if err != nil {
 		return err
 	}
-	g.promoteCookiesToRoot(targetURL, scriptResp.Cookies())
+	g.promoteCookiesToRoot(challengeOrigin, scriptResp.Cookies())
 	scriptBytes, _ := io.ReadAll(io.LimitReader(scriptResp.Body, 512*1024))
 	_ = scriptResp.Body.Close()
 
@@ -544,11 +654,33 @@ func (g *GuardianService) solveFastlyChallenge(ctx context.Context, targetURL st
 				}
 				answers = append(answers, powAns)
 			case "pat":
+				// Probe the Fastly PAT endpoint just as the browser challenge script does
+				patURL := fmt.Sprintf("%s/pat?token=%s", prefixURL, url.QueryEscape(token))
+				if patReq, pErr := http.NewRequestWithContext(ctx, http.MethodPost, patURL, bytes.NewReader(nil)); pErr == nil {
+					patReq.Header.Set("User-Agent", SolverUserAgent)
+					patReq.Header.Set("Origin", challengeOrigin)
+					patReq.Header.Set("Referer", challengeOrigin+"/")
+					if patResp, dErr := g.httpClient.Do(patReq); dErr == nil {
+						g.promoteCookiesToRoot(challengeOrigin, patResp.Cookies())
+						_, _ = io.Copy(io.Discard, io.LimitReader(patResp.Body, 4096))
+						_ = patResp.Body.Close()
+					}
+				}
 				answers = append(answers, map[string]any{
 					"ty":   "pat",
 					"auth": "",
 				})
 			case "clientmetrics":
+				clientDataMap := map[string]any{
+					"userAgent":           SolverUserAgent,
+					"language":            "en-US",
+					"languages":           []string{"en-US", "en"},
+					"platform":            "Win32",
+					"hardwareConcurrency": 8,
+					"maxTouchPoints":      0,
+					"cookieEnabled":       true,
+				}
+				clientDataJSON, _ := json.Marshal(clientDataMap)
 				answers = append(answers, map[string]any{
 					"ty":        "clientmetrics",
 					"webdriver": false,
@@ -557,7 +689,7 @@ func (g *GuardianService) solveFastlyChallenge(ctx context.Context, targetURL st
 						"bot_kind":     nil,
 					},
 					"browser_metrics": map[string]any{
-						"client_data": `{"userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:135.0) Gecko/20100101 Firefox/135.0","language":"en-US","languages":["en-US","en"],"platform":"Win32","hardwareConcurrency":8,"maxTouchPoints":0,"cookieEnabled":true}`,
+						"client_data": string(clientDataJSON),
 						"error_trace": nil,
 					},
 					"detector_results": map[string]any{},
@@ -584,8 +716,11 @@ func (g *GuardianService) solveFastlyChallenge(ctx context.Context, targetURL st
 		postReq.Header.Set("Accept", "application/json, text/plain, */*")
 		postReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
 		postReq.Header.Set("User-Agent", SolverUserAgent)
-		postReq.Header.Set("Origin", baseHost)
-		postReq.Header.Set("Referer", targetURL)
+		postReq.Header.Set("Origin", challengeOrigin)
+		postReq.Header.Set("Referer", challengeOrigin+"/")
+		postReq.Header.Set("Sec-Ch-Ua", `"Chromium";v="131", "Not_A Brand";v="24"`)
+		postReq.Header.Set("Sec-Ch-Ua-Mobile", "?0")
+		postReq.Header.Set("Sec-Ch-Ua-Platform", `"Windows"`)
 		postReq.Header.Set("Sec-Fetch-Dest", "empty")
 		postReq.Header.Set("Sec-Fetch-Mode", "cors")
 		postReq.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -594,13 +729,12 @@ func (g *GuardianService) solveFastlyChallenge(ctx context.Context, targetURL st
 		if err != nil {
 			return err
 		}
-		g.promoteCookiesToRoot(targetURL, postResp.Cookies())
+		g.promoteCookiesToRoot(challengeOrigin, postResp.Cookies())
 		respData, _ := io.ReadAll(io.LimitReader(postResp.Body, 64*1024))
 		_ = postResp.Body.Close()
 
-		// Some Fastly edge nodes return 200 OK with empty body or redirect once clearance cookie is set
 		if len(bytes.TrimSpace(respData)) == 0 && postResp.StatusCode >= 200 && postResp.StatusCode < 400 {
-			g.log("INFO", "Fastly anti-bot challenge solved (cookie granted)")
+			g.log("INFO", "Fastly anti-bot challenge solved (clearance cookie granted)")
 			return nil
 		}
 
@@ -1090,7 +1224,7 @@ func (g *GuardianService) RefreshOAuthToken(ctx context.Context, refreshToken st
 		"scope":         OAuthScope,
 	}
 	bodyJSON, _ := json.Marshal(payload)
-	tokenURL := FxaAuthServer + "/oauth/token"
+	tokenURL := FxaOAuthServer + "/oauth/token"
 
 	resp, err := g.doWithChallenge(ctx, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, bytes.NewReader(bodyJSON))
@@ -1446,7 +1580,8 @@ func (g *GuardianService) FetchProxyPass(ctx context.Context, accessToken string
 	}, nil
 }
 
-// GetValidProxyPass returns a fresh ProxyPassInfo, automatically refreshing OAuth tokens or rotating token pools on 401/429.
+// GetValidProxyPass returns a fresh ProxyPassInfo, automatically refreshing OAuth tokens,
+// re-exchanging HAWK sessionToken if refresh fails, or rotating token pools on 401/429.
 func (g *GuardianService) GetValidProxyPass(ctx context.Context) (*ProxyPassInfo, error) {
 	g.mu.Lock()
 	saved := g.savedTokens
@@ -1456,32 +1591,52 @@ func (g *GuardianService) GetValidProxyPass(ctx context.Context) (*ProxyPassInfo
 		return nil, errors.New("not authenticated")
 	}
 
-	if !saved.AccessTokenValid() && saved.RefreshToken != "" {
-		if refreshed, err := g.RefreshOAuthToken(ctx, saved.RefreshToken); err == nil {
-			saved.AccessToken = refreshed.AccessToken
-			saved.RefreshToken = refreshed.RefreshToken
-			saved.ExpiresIn = refreshed.ExpiresIn
-			saved.ObtainedAt = time.Now()
-			_ = g.SaveTokens(saved)
-		}
-	}
-
-	pass, err := g.FetchProxyPass(ctx, saved.AccessToken)
-	if errors.Is(err, ErrTokenInvalid) {
-		// Attempt to activate Guardian entitlement first, then refresh OAuth token
-		if _, actErr := g.ActivateGuardian(ctx, saved.AccessToken); actErr == nil {
-			if retryPass, retryErr := g.FetchProxyPass(ctx, saved.AccessToken); retryErr == nil {
-				return retryPass, nil
-			}
-		}
+	refreshOrReexchange := func() bool {
 		if saved.RefreshToken != "" {
-			if refreshed, refErr := g.RefreshOAuthToken(ctx, saved.RefreshToken); refErr == nil {
+			if refreshed, err := g.RefreshOAuthToken(ctx, saved.RefreshToken); err == nil && refreshed.AccessToken != "" {
 				saved.AccessToken = refreshed.AccessToken
 				saved.RefreshToken = refreshed.RefreshToken
 				saved.ExpiresIn = refreshed.ExpiresIn
 				saved.ObtainedAt = time.Now()
 				_ = g.SaveTokens(saved)
-				return g.FetchProxyPass(ctx, saved.AccessToken)
+				return true
+			}
+		}
+		if saved.SessionToken != "" {
+			if exchanged, err := g.ExchangeOAuthToken(ctx, saved.SessionToken); err == nil && exchanged.AccessToken != "" {
+				saved.AccessToken = exchanged.AccessToken
+				if exchanged.RefreshToken != "" {
+					saved.RefreshToken = exchanged.RefreshToken
+				}
+				saved.ExpiresIn = exchanged.ExpiresIn
+				saved.ObtainedAt = time.Now()
+				_ = g.SaveTokens(saved)
+				return true
+			}
+		}
+		return false
+	}
+
+	if !saved.AccessTokenValid() {
+		refreshOrReexchange()
+	}
+
+	pass, err := g.FetchProxyPass(ctx, saved.AccessToken)
+	if errors.Is(err, ErrTokenInvalid) {
+		// Step 1: Refresh OAuth token (or re-exchange sessionToken via HAWK) first
+		if refreshOrReexchange() {
+			if retryPass, retryErr := g.FetchProxyPass(ctx, saved.AccessToken); retryErr == nil {
+				return retryPass, nil
+			} else {
+				err = retryErr
+			}
+		}
+		// Step 2: If token is still rejected, ensure Guardian FPN entitlement is activated
+		if errors.Is(err, ErrTokenInvalid) {
+			if _, actErr := g.ActivateGuardian(ctx, saved.AccessToken); actErr == nil {
+				if retryPass, retryErr := g.FetchProxyPass(ctx, saved.AccessToken); retryErr == nil {
+					return retryPass, nil
+				}
 			}
 		}
 	}

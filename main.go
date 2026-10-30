@@ -29,7 +29,7 @@ func main() {
 	}()
 
 	err := wails.Run(&options.App{
-		Title:     "FoxyVPN v1.0.5 — Mozilla Guardian & Wintun Client",
+		Title:     "FoxyVPN v1.0.7 — Mozilla Guardian & Wintun Client",
 		Width:     400,
 		Height:    760,
 		MinWidth:  360,

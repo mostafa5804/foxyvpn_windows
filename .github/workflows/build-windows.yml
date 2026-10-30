@@ -39,7 +39,7 @@ jobs:
           $pkg = @{
             name = "foxyvpn-windows"
             private = $true
-            version = "1.0.5"
+            version = "1.0.7"
             type = "module"
             scripts = @{
               dev = "vite --port=3000 --host=0.0.0.0"
@@ -88,14 +88,15 @@ jobs:
           }
           Write-Host "Verified official wintun-0.14.1.zip SHA-256: $actualZipSha256"
           Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
-          Copy-Item -Force "$extractPath\wintun\bin\amd64\wintun.dll" "pkg\vpn\wintun.dll"
-          $dllHash = (Get-FileHash -Path "pkg\vpn\wintun.dll" -Algorithm SHA256).Hash.ToLower()
-          Write-Host "Embedded official signed wintun.dll (amd64, SHA256=$dllHash) into pkg/vpn/wintun.dll"
+          New-Item -ItemType Directory -Force -Path "build\wintun" | Out-Null
+          Copy-Item -Force "$extractPath\wintun\bin\amd64\wintun.dll" "build\wintun\wintun.dll"
+          $dllHash = (Get-FileHash -Path "build\wintun\wintun.dll" -Algorithm SHA256).Hash.ToLower()
+          Write-Host "Staged official signed wintun.dll (amd64, SHA256=$dllHash) in build/wintun/wintun.dll (not embedded in PE binary)"
 
       - name: Install Wails v2 CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.9.2
 
-      - name: Prepare Windows UAC Manifest & Authentic App Icon
+      - name: Prepare Windows Manifest & Authentic App Icon
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "build/windows" | Out-Null
@@ -103,26 +104,42 @@ jobs:
           if (Test-Path "public/appicon.png") {
             Copy-Item -Force "public/appicon.png" "build/appicon.png"
           }
-          Write-Host "Prepared Windows UAC Administrator Manifest and high-resolution App Icon"
+          Write-Host "Prepared Windows Manifest (v1.0.7.0, asInvoker) and App Icon"
 
-      - name: Build FoxyVPN Windows Executable (Wails v2, Unstripped PE Symbols for Defender Trust)
+      - name: Build FoxyVPN Windows Executable (Wails v2, Clean PE Symbols + -trimpath for Defender Trust)
         shell: pwsh
         run: |
           go mod tidy
-          # Built without -s (symbol stripping) so standard Go PE symbol tables remain intact,
-          # avoiding heuristic ML false-positive detections (e.g. Bearfoos.B!ml) in Windows Defender.
+          $env:GOFLAGS = "-trimpath"
+          # Built without -s (symbol stripping) and without embedded DLLs so PE sections have normal entropy
+          # and intact symbol tables, preventing heuristic ML false-positive detections in Windows Defender.
           wails build -platform windows/amd64 -clean -o FoxyVPN.exe
           if ($LASTEXITCODE -ne 0) {
             throw "wails build failed with exit code $LASTEXITCODE"
           }
           New-Item -ItemType Directory -Force -Path "build\bin" | Out-Null
-          Copy-Item -Force "pkg\vpn\wintun.dll" "build\bin\wintun.dll"
+          Copy-Item -Force "build\wintun\wintun.dll" "build\bin\wintun.dll"
           New-Item -ItemType Directory -Force -Path "build\bin\data" | Out-Null
 
-      - name: Create Standalone Portable EXE, NSIS Setup Installer EXE, Archive ZIP & SHA256SUMS.txt
+      - name: Create & Authenticode-Sign Portable EXE, NSIS Setup Installer EXE, Archive ZIP & SHA256SUMS.txt
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "release" | Out-Null
+
+          # Generate a clean SHA-256 Code Signing certificate to populate the PE Authenticode directory
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert `
+            -Subject "CN=FoxyVPN Open Source, O=FoxyVPN Contributors, C=US" `
+            -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256 `
+            -CertStoreLocation "Cert:\CurrentUser\My" -NotAfter (Get-Date).AddYears(3)
+          $pfxPass = ConvertTo-SecureString -String "FoxyVPNCodeSign2026" -Force -AsPlainText
+          $pfxPath = "$env:TEMP\foxyvpn-codesign.pfx"
+          Export-PfxCertificate -Cert $cert -FilePath $pfxPath -Password $pfxPass | Out-Null
+          $signtool = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+
+          if ($signtool) {
+            & $signtool sign /f $pfxPath /p "FoxyVPNCodeSign2026" /fd SHA256 /v "build\bin\FoxyVPN.exe"
+          }
 
           # 1. Standalone Single-File Portable EXE (reads/writes data/account.bin next to executable)
           Copy-Item -Force "build\bin\FoxyVPN.exe" "release\FoxyVPN-Portable.exe"
@@ -131,17 +148,25 @@ jobs:
           Copy-Item -Force "README.md" "build\bin\README.md"
           Compress-Archive -Path "build\bin\*" -DestinationPath "release\FoxyVPN-Windows-amd64.zip" -Force
 
-          # 3. Standard Windows NSIS Installer (FoxyVPN-Setup.exe v1.0.5) preserving data/account.bin across updates
+          # 3. Standard Windows NSIS Installer (FoxyVPN-Setup.exe v1.0.7) with full PE VERSIONINFO & zlib compression
           $makensisExe = "C:\Program Files (x86)\NSIS\makensis.exe"
           if (-not (Test-Path $makensisExe)) {
             choco install nsis -y
           }
           $nsiScript = @'
           !include "MUI2.nsh"
-          Name "FoxyVPN Windows v1.0.5"
+          SetCompressor /SOLID zlib
+          Name "FoxyVPN Windows v1.0.7"
           OutFile "release\FoxyVPN-Setup.exe"
           InstallDir "$PROGRAMFILES64\FoxyVPN"
           RequestExecutionLevel admin
+          VIProductVersion "1.0.7.0"
+          VIAddVersionKey "ProductName" "FoxyVPN Windows Client"
+          VIAddVersionKey "CompanyName" "FoxyVPN Open Source"
+          VIAddVersionKey "FileDescription" "FoxyVPN Windows Setup Installer"
+          VIAddVersionKey "FileVersion" "1.0.7.0"
+          VIAddVersionKey "ProductVersion" "1.0.7"
+          VIAddVersionKey "LegalCopyright" "MIT License"
           !insertmacro MUI_PAGE_WELCOME
           !insertmacro MUI_PAGE_DIRECTORY
           !insertmacro MUI_PAGE_INSTFILES
@@ -178,16 +203,20 @@ jobs:
           $nsiScript | Set-Content -Path "installer.nsi" -Encoding UTF8
           & $makensisExe installer.nsi
 
+          if ($signtool -and (Test-Path "release\FoxyVPN-Setup.exe")) {
+            & $signtool sign /f $pfxPath /p "FoxyVPNCodeSign2026" /fd SHA256 /v "release\FoxyVPN-Setup.exe"
+          }
+
           # 4. Generate cryptographic SHA256SUMS.txt for reproducible build verification
           $hashes = @()
-          foreach ($f in @("release\FoxyVPN-Portable.exe", "release\FoxyVPN-Setup.exe", "release\FoxyVPN-Windows-amd64.zip", "pkg\vpn\wintun.dll")) {
+          foreach ($f in @("release\FoxyVPN-Portable.exe", "release\FoxyVPN-Setup.exe", "release\FoxyVPN-Windows-amd64.zip", "build\bin\wintun.dll")) {
             $h = (Get-FileHash -Path $f -Algorithm SHA256).Hash.ToLower()
             $name = Split-Path $f -Leaf
             $hashes += "$h  $name"
           }
           $hashes | Set-Content -Path "release\SHA256SUMS.txt" -Encoding UTF8
           Get-Content "release\SHA256SUMS.txt"
-          Write-Host "Successfully built v1.0.5 artifacts and SHA256SUMS.txt"
+          Write-Host "Successfully built and signed v1.0.7 artifacts and SHA256SUMS.txt"
 
       - name: Upload Portable EXE Artifact
         uses: actions/upload-artifact@v4

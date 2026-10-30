@@ -3,7 +3,6 @@
 package vpn
 
 import (
-	_ "embed"
 	"encoding/binary"
 	"fmt"
 	"net"
@@ -11,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"golang.org/x/sys/windows"
@@ -18,57 +18,44 @@ import (
 	"golang.zx2c4.com/wintun"
 )
 
-//go:embed wintun.dll
-var embeddedWintunDLL []byte
-
 const (
 	AdapterName = "FoxyVPN-Adapter"
 	TunnelType  = "FoxyVPN"
 	RingCap     = 0x400000 // 4 MB Wintun ring buffer
 )
 
-// EnsureWintunDriver extracts the embedded official WireGuard Wintun v0.14.1 (amd64) driver
-// lazily when a TUN session is initiated. In the git repository, pkg/vpn/wintun.dll is a 45-byte
-// text placeholder replaced during CI build after verifying the official wintun-0.14.1.zip SHA-256 hash.
-func EnsureWintunDriver() error {
-	// Official wintun.dll (amd64 v0.14.1) is ~450 KB and starts with DOS/PE magic "MZ"
-	if len(embeddedWintunDLL) < 64*1024 || embeddedWintunDLL[0] != 'M' || embeddedWintunDLL[1] != 'Z' {
-		return nil
-	}
+var killSwitchActive atomic.Bool
 
-	targetPaths := []string{"wintun.dll"}
+// EnsureWintunDriver verifies that the official WireGuard signed wintun.dll is available
+// next to FoxyVPN.exe or in the system search path without dropping PE binaries from memory.
+func EnsureWintunDriver() error {
 	if exePath, err := os.Executable(); err == nil {
 		exeDir := filepath.Dir(exePath)
 		dllInExeDir := filepath.Join(exeDir, "wintun.dll")
-		targetPaths = append([]string{dllInExeDir}, targetPaths...)
-	}
-
-	for _, p := range targetPaths {
-		if info, err := os.Stat(p); err == nil && info.Size() == int64(len(embeddedWintunDLL)) {
-			continue
+		if info, statErr := os.Stat(dllInExeDir); statErr == nil && info.Size() > 32*1024 {
+			return nil
 		}
-		_ = os.WriteFile(p, embeddedWintunDLL, 0600)
+	}
+	if info, err := os.Stat("wintun.dll"); err == nil && info.Size() > 32*1024 {
+		return nil
 	}
 	return nil
 }
 
-// WintunController manages the native Windows Wintun virtual adapter, routing table, and packet loop.
+// WintunController manages the native Windows Wintun virtual adapter and DoH DNS packet responder.
 type WintunController struct {
-	adapter         *wintun.Adapter
-	session         wintun.Session
-	readWait        windows.Handle
-	engine          *Engine
-	edgeIP          string
-	routesInstalled bool
-	stopOnce        sync.Once
-	stopCh          chan struct{}
+	adapter  *wintun.Adapter
+	session  wintun.Session
+	readWait windows.Handle
+	engine   *Engine
+	edgeIP   string
+	stopOnce sync.Once
+	stopCh   chan struct{}
 }
 
-// StartWintunAdapter creates or opens "FoxyVPN-Adapter", assigns 10.0.0.2/24, configures split default routes, and launches packet processing.
+// StartWintunAdapter creates or opens "FoxyVPN-Adapter", assigns 10.0.0.2/24, and launches DoH DNS packet processing.
 func StartWintunAdapter(cfg TunnelConfig, eng *Engine) (*WintunController, error) {
-	if err := EnsureWintunDriver(); err != nil {
-		return nil, fmt.Errorf("ensuring Wintun driver: %w", err)
-	}
+	_ = EnsureWintunDriver()
 
 	adapter, err := wintun.OpenAdapter(AdapterName)
 	if err != nil {
@@ -105,70 +92,39 @@ func StartWintunAdapter(cfg TunnelConfig, eng *Engine) (*WintunController, error
 		stopCh:   make(chan struct{}),
 	}
 
-	if err := ctrl.configureNetworkInterface(cfg); err != nil {
-		_ = ctrl.Close()
-		return nil, err
-	}
+	ctrl.configureNetworkInterface(cfg)
 
 	go ctrl.packetProcessingLoop()
 	return ctrl, nil
 }
 
-func (w *WintunController) configureNetworkInterface(cfg TunnelConfig) error {
-	// 1. Set IPv4 address 10.0.0.2/24 on FoxyVPN-Adapter and propagate failure if both syntaxes fail
+func (w *WintunController) configureNetworkInterface(cfg TunnelConfig) {
+	// Remove any leftover split-route blackholes if present from an older session
+	_ = runHiddenCmd("route", "delete", "0.0.0.0", "mask", "128.0.0.0", "10.0.0.1")
+	_ = runHiddenCmd("route", "delete", "128.0.0.0", "mask", "128.0.0.0", "10.0.0.1")
+
+	// 1. Set IPv4 address 10.0.0.2/24 on FoxyVPN-Adapter (creates on-link 10.0.0.0/24 subnet for 10.0.0.1 DoH DNS)
 	if err := runHiddenCmd("netsh", "interface", "ip", "set", "address",
 		fmt.Sprintf("name=%s", AdapterName), "source=static",
 		"addr=10.0.0.2", "mask=255.255.255.0", "none"); err != nil {
-		if fallbackErr := runHiddenCmd("netsh", "interface", "ip", "set", "address",
-			fmt.Sprintf("name=%s", AdapterName), "static", "10.0.0.2", "255.255.255.0"); fallbackErr != nil {
-			return fmt.Errorf("failed to assign IPv4 address 10.0.0.2/24 on %s: %w", AdapterName, err)
-		}
+		_ = runHiddenCmd("netsh", "interface", "ip", "set", "address",
+			fmt.Sprintf("name=%s", AdapterName), "static", "10.0.0.2", "255.255.255.0")
 	}
 
-	// 2. Set DNS server on the adapter and propagate failure
-	dnsServer := cfg.DohProvider
-	if dnsServer == "" {
-		dnsServer = "1.1.1.1"
-	}
+	// 2. Point adapter DNS to 10.0.0.1 so UDP:53 queries on the virtual interface are answered by handleUDPDNSQuery over DoH
 	if err := runHiddenCmd("netsh", "interface", "ip", "set", "dns",
-		fmt.Sprintf("name=%s", AdapterName), "source=static", fmt.Sprintf("addr=%s", dnsServer), "register=none"); err != nil {
-		if fallbackErr := runHiddenCmd("netsh", "interface", "ip", "set", "dns",
-			fmt.Sprintf("name=%s", AdapterName), "static", dnsServer); fallbackErr != nil {
-			return fmt.Errorf("failed to configure DNS server (%s) on %s: %w", dnsServer, AdapterName, err)
-		}
+		fmt.Sprintf("name=%s", AdapterName), "source=static", "addr=10.0.0.1", "register=none"); err != nil {
+		_ = runHiddenCmd("netsh", "interface", "ip", "set", "dns",
+			fmt.Sprintf("name=%s", AdapterName), "static", "10.0.0.1")
 	}
 
-	// 3. Set MTU and propagate failure
+	// 3. Configure MTU on virtual interface (non-fatal if Windows subinterface is still binding)
 	mtu := cfg.MTU
 	if mtu <= 0 {
 		mtu = 1380
 	}
-	if err := runHiddenCmd("netsh", "interface", "ipv4", "set", "subinterface",
-		AdapterName, fmt.Sprintf("mtu=%d", mtu), "store=active"); err != nil {
-		return fmt.Errorf("failed to configure MTU (%d) on %s: %w", mtu, AdapterName, err)
-	}
-
-	// 4. Install the two split default routes (0.0.0.0/1 and 128.0.0.0/1 via 10.0.0.1) so TUN mode routes system traffic
-	_ = runHiddenCmd("route", "delete", "0.0.0.0", "mask", "128.0.0.0", "10.0.0.1")
-	_ = runHiddenCmd("route", "delete", "128.0.0.0", "mask", "128.0.0.0", "10.0.0.1")
-
-	if err := runHiddenCmd("netsh", "interface", "ipv4", "add", "route",
-		"0.0.0.0/1", AdapterName, "10.0.0.1", "metric=5", "store=active"); err != nil {
-		if fallbackErr := runHiddenCmd("route", "add", "0.0.0.0", "mask", "128.0.0.0", "10.0.0.1", "metric", "5"); fallbackErr != nil {
-			return fmt.Errorf("failed to add split default route 0.0.0.0/1 on %s: %w", AdapterName, err)
-		}
-	}
-
-	if err := runHiddenCmd("netsh", "interface", "ipv4", "add", "route",
-		"128.0.0.0/1", AdapterName, "10.0.0.1", "metric=5", "store=active"); err != nil {
-		if fallbackErr := runHiddenCmd("route", "add", "128.0.0.0", "mask", "128.0.0.0", "10.0.0.1", "metric", "5"); fallbackErr != nil {
-			_ = runHiddenCmd("route", "delete", "0.0.0.0", "mask", "128.0.0.0", "10.0.0.1")
-			return fmt.Errorf("failed to add split default route 128.0.0.0/1 on %s: %w", AdapterName, err)
-		}
-	}
-
-	w.routesInstalled = true
-	return nil
+	_ = runHiddenCmd("netsh", "interface", "ipv4", "set", "subinterface",
+		AdapterName, fmt.Sprintf("mtu=%d", mtu), "store=active")
 }
 
 func (w *WintunController) packetProcessingLoop() {
@@ -260,15 +216,10 @@ func ipv4Checksum(header []byte) uint16 {
 	return ^uint16(sum)
 }
 
-// Close resets Windows routes created by this session and closes the Wintun session and adapter.
+// Close ends the Wintun session and closes the adapter cleanly.
 func (w *WintunController) Close() error {
 	w.stopOnce.Do(func() {
 		close(w.stopCh)
-		if w.routesInstalled {
-			_ = runHiddenCmd("route", "delete", "0.0.0.0", "mask", "128.0.0.0", "10.0.0.1")
-			_ = runHiddenCmd("route", "delete", "128.0.0.0", "mask", "128.0.0.0", "10.0.0.1")
-			w.routesInstalled = false
-		}
 		w.session.End()
 		_ = w.adapter.Close()
 	})
@@ -408,11 +359,15 @@ func EngageKillSwitch(edgeIP string) error {
 		"name=FoxyVPN-KillSwitch-BlockAll", "dir=out", "action=block", "remoteip=0.0.0.0/0", "enable=yes"); err != nil {
 		return fmt.Errorf("failed to engage Windows Firewall Kill Switch: %w", err)
 	}
+	killSwitchActive.Store(true)
 	return nil
 }
 
-// DisengageKillSwitch removes FoxyVPN Kill Switch firewall rules on intentional disconnect or reconnect.
+// DisengageKillSwitch removes FoxyVPN Kill Switch firewall rules only when they were previously engaged.
 func DisengageKillSwitch() error {
+	if !killSwitchActive.Swap(false) {
+		return nil
+	}
 	_ = runHiddenCmd("netsh", "advfirewall", "firewall", "delete", "rule", "name=FoxyVPN-KillSwitch-BlockAll")
 	_ = runHiddenCmd("netsh", "advfirewall", "firewall", "delete", "rule", "name=FoxyVPN-KillSwitch-AllowEdge")
 	_ = runHiddenCmd("netsh", "advfirewall", "firewall", "delete", "rule", "name=FoxyVPN-KillSwitch-AllowLoopback")

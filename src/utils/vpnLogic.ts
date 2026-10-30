@@ -348,7 +348,7 @@ export function countryCodeToFlag(countryCode: string): string {
 
 export const ACCOUNT_BIN_PATH = 'data/account.bin';
 export const ACCOUNT_BIN_MAGIC = 'FOXYBIN1';
-export const APP_VERSION = '1.0.6';
+export const APP_VERSION = '1.0.7';
 
 export function compareSemver(a: string, b: string): number {
   const pa = a.replace(/^v/i, '').trim().split('.').map((n) => parseInt(n, 10) || 0);
