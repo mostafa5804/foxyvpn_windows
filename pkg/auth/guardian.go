@@ -45,8 +45,8 @@ const (
 	pbkdf2Rounds               = 1000
 	stretchedPWLen             = 32
 	hkdfLen                    = 32
-	maxChallengeAttempts       = 5
-	maxPostBackRounds          = 4
+	maxChallengeAttempts       = 6
+	maxPostBackRounds          = 6
 	fxaCallMinBudget           = 90 * time.Second
 	controlPlaneHTTPTimeout    = 30 * time.Second
 	verificationMethodEmail2FA = "email-2fa"
@@ -63,7 +63,7 @@ var (
 	ErrVerificationNeede = errors.New("email 6-digit verification code required")
 
 	challengePrefixRegex = regexp.MustCompile(`/_fs-ch-[A-Za-z0-9._-]+`)
-	initCallRegex        = regexp.MustCompile(`init\(\s*(\[[\s\S]*?\])\s*,\s*"([^"]+)"`)
+	initCallRegex        = regexp.MustCompile(`init\(\s*(\[[\s\S]*?\])\s*,\s*["']([^"']+)["']`)
 	powAlphabet          = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 )
 
