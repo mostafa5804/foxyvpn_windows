@@ -1,6 +1,6 @@
 <div align="center">
   <img src="public/foxyvpn-windows-logo.svg" width="128" height="128" alt="FoxyVPN Windows Logo" />
-  <h1>FoxyVPN for Windows (v1.0.6)</h1>
+  <h1>FoxyVPN for Windows </h1>
   <p><strong>Native Windows Desktop Client for Mozilla Firefox IP Protection (Guardian / Fastly MASQUE & HTTP/2 CONNECT)</strong></p>
 
   <p>
