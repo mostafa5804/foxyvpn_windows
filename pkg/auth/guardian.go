@@ -81,6 +81,26 @@ func NewSimpleCookieJar() *SimpleCookieJar {
 	}
 }
 
+func (j *SimpleCookieJar) ClearChallengeCookies() {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	for k := range j.cookies {
+		if strings.HasPrefix(k, "_fs_ch_") {
+			delete(j.cookies, k)
+		}
+	}
+}
+
+func (j *SimpleCookieJar) ClearStateCookies() {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	for k := range j.cookies {
+		if strings.HasPrefix(k, "_fs_ch_st_") {
+			delete(j.cookies, k)
+		}
+	}
+}
+
 func (j *SimpleCookieJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
 	if len(cookies) == 0 {
 		return
@@ -91,20 +111,39 @@ func (j *SimpleCookieJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
 		if c == nil || c.Name == "" {
 			continue
 		}
+		if c.Value == "" || c.MaxAge < 0 {
+			delete(j.cookies, c.Name)
+			continue
+		}
 		cp := *c
 		cp.Path = "/"
 		if cp.Domain == "" && u != nil && strings.HasSuffix(strings.ToLower(u.Hostname()), "firefox.com") {
-			cp.Domain = "firefox.com"
+			if strings.HasPrefix(cp.Name, "_fs_ch_cp_") {
+				cp.Domain = "firefox.com"
+			} else {
+				cp.Domain = strings.ToLower(u.Hostname())
+			}
 		}
 		j.cookies[cp.Name] = &cp
 	}
 }
 
 func (j *SimpleCookieJar) Cookies(u *url.URL) []*http.Cookie {
+	if u == nil {
+		return nil
+	}
+	host := strings.ToLower(u.Hostname())
+	if !strings.HasSuffix(host, "firefox.com") {
+		return nil
+	}
+	isChallengeHost := host == "accounts.firefox.com"
 	j.mu.RLock()
 	defer j.mu.RUnlock()
 	out := make([]*http.Cookie, 0, len(j.cookies))
 	for _, c := range j.cookies {
+		if strings.HasPrefix(c.Name, "_fs_ch_st_") && !isChallengeHost {
+			continue
+		}
 		out = append(out, c)
 	}
 	return out
@@ -268,7 +307,26 @@ func (g *GuardianService) newDirectTransport() *http.Transport {
 		MaxIdleConns:        32,
 		IdleConnTimeout:     60 * time.Second,
 		TLSHandshakeTimeout: 15 * time.Second,
-		TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
+		TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			CipherSuites: []uint16{
+				tls.TLS_AES_128_GCM_SHA256,
+				tls.TLS_AES_256_GCM_SHA384,
+				tls.TLS_CHACHA20_POLY1305_SHA256,
+				tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
+				tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
+				tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,
+				tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
+				tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_RSA_WITH_AES_128_CBC_SHA,
+				tls.TLS_RSA_WITH_AES_256_CBC_SHA,
+			},
+		},
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			host, port, splitErr := net.SplitHostPort(addr)
 			if splitErr == nil && strings.HasSuffix(strings.ToLower(host), "firefox.com") {
@@ -346,7 +404,20 @@ func (g *GuardianService) SetControlPlaneProxy(rawProxyURL string) error {
 	dialer := &net.Dialer{Timeout: 20 * time.Second, KeepAlive: 30 * time.Second}
 	transport := &http.Transport{
 		ForceAttemptHTTP2: true,
-		TLSClientConfig:   &tls.Config{MinVersion: tls.VersionTLS12},
+		TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			CipherSuites: []uint16{
+				tls.TLS_AES_128_GCM_SHA256,
+				tls.TLS_AES_256_GCM_SHA384,
+				tls.TLS_CHACHA20_POLY1305_SHA256,
+				tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
+				tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,
+			},
+		},
 	}
 
 	switch strings.ToLower(parsed.Scheme) {
@@ -478,6 +549,14 @@ func applyMozillaHeaders(req *http.Request) {
 	}
 }
 
+// applyGuardianHeaders sets the official Mozilla VPN client headers for vpn.mozilla.org (Guardian endpoints).
+// Note: vpn.mozilla.org intentionally rejects browser User-Agents (Chrome/Firefox) with HTTP 406.
+func applyGuardianHeaders(req *http.Request) {
+	req.Header.Set("User-Agent", MozillaVPNUserAgent)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+}
+
 func (g *GuardianService) promoteCookiesToRoot(rawURL string, cookies []*http.Cookie) {
 	if g.cookieJar == nil || len(cookies) == 0 {
 		return
@@ -545,6 +624,11 @@ func (g *GuardianService) solveFastlyChallenge(ctx context.Context, targetURL st
 	baseHost := u.Scheme + "://" + u.Host
 	challengeOrigin := baseHost
 	page := initialPage
+
+	// Clear prior challenge cookies so accounts.firefox.com serves a fresh /_fs-ch- challenge page instead of 200 OK
+	if sj, ok := g.cookieJar.(*SimpleCookieJar); ok {
+		sj.ClearChallengeCookies()
+	}
 
 	// api.accounts.firefox.com returns an empty-body 406; the actual /_fs-ch- challenge page is served on https://accounts.firefox.com/
 	if !strings.Contains(page, "/_fs-ch-") {
@@ -672,15 +756,58 @@ func (g *GuardianService) solveFastlyChallenge(ctx context.Context, targetURL st
 				})
 			case "clientmetrics":
 				clientDataMap := map[string]any{
-					"userAgent":           SolverUserAgent,
-					"language":            "en-US",
-					"languages":           []string{"en-US", "en"},
-					"platform":            "Win32",
-					"hardwareConcurrency": 8,
-					"maxTouchPoints":      0,
-					"cookieEnabled":       true,
+					"android":                 map[string]any{"value": false},
+					"browserKind":             map[string]any{"value": "chrome"},
+					"browserEngineKind":       map[string]any{"value": "chromium"},
+					"documentFocus":           map[string]any{"value": true},
+					"userAgent":               map[string]any{"value": SolverUserAgent},
+					"appVersion":              map[string]any{"value": "5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"},
+					"rtt":                     map[string]any{"value": 50},
+					"windowSize":              map[string]any{"value": map[string]any{"outerWidth": 1920, "outerHeight": 1080, "innerWidth": 1920, "innerHeight": 969}},
+					"pdfViewerEnabled":        map[string]any{"value": true},
+					"pluginsLength":           map[string]any{"value": 5},
+					"pluginsArray":            map[string]any{"value": true},
+					"productSub":              map[string]any{"value": "20030107"},
+					"windowExternal":          map[string]any{"value": "[object External]"},
+					"mimeTypesConsistent":     map[string]any{"value": true},
+					"evalLength":              map[string]any{"value": 33},
+					"webGL":                   map[string]any{"value": map[string]any{"vendor": "Google Inc. (Intel)", "renderer": "ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)"}},
+					"webDriver":               map[string]any{"value": false},
+					"languages":               map[string]any{"value": []any{[]string{"en-US"}, []string{"en-US", "en"}}},
+					"notificationPermissions": map[string]any{"value": false},
+					"documentElementKeys":     map[string]any{"value": []string{"lang", "dir"}},
+					"functionBind":            map[string]any{"value": "function bind() { [native code] }"},
+					"distinctiveProps": map[string]any{
+						"value": map[string]any{
+							"awesomium": false, "cef": false, "cefsharp": false, "coachjs": false, "fminer": false,
+							"geb": false, "nightmarejs": false, "phantomas": false, "phantomjs": false, "playwright": false,
+							"rhino": false, "selenium": false, "webdriverio": false, "webdriver": false, "headless_chrome": false,
+						},
+					},
+					"iframeSrcdoc": map[string]any{"value": map[string]any{"hasSelfGet": true, "selfGetToString": "function get self() { [native code] }"}},
 				}
 				clientDataJSON, _ := json.Marshal(clientDataMap)
+				detectorResults := map[string]string{
+					"detectAppVersion":                    "",
+					"detectDocumentAttributes":            "",
+					"detectErrorTrace":                    "",
+					"detectEvalLengthInconsistency":       "",
+					"detectFunctionBind":                  "",
+					"detectLanguagesLengthInconsistency":  "",
+					"detectNotificationPermissions":       "",
+					"detectPluginsArray":                  "",
+					"detectPluginsLengthInconsistency":    "",
+					"detectProcess":                       "",
+					"detectPuppeteerStealth":              "",
+					"detectUserAgent":                     "",
+					"detectWebDriver":                     "",
+					"detectWebGL":                         "",
+					"detectWindowExternal":                "",
+					"detectWindowSize":                    "",
+					"detectMimeTypesConsistent":           "",
+					"detectProductSub":                    "",
+					"detectDistinctiveProperties":         "",
+				}
 				answers = append(answers, map[string]any{
 					"ty":        "clientmetrics",
 					"webdriver": false,
@@ -692,7 +819,7 @@ func (g *GuardianService) solveFastlyChallenge(ctx context.Context, targetURL st
 						"client_data": string(clientDataJSON),
 						"error_trace": nil,
 					},
-					"detector_results": map[string]any{},
+					"detector_results": detectorResults,
 					"v":                2,
 				})
 			default:
@@ -734,6 +861,9 @@ func (g *GuardianService) solveFastlyChallenge(ctx context.Context, targetURL st
 		_ = postResp.Body.Close()
 
 		if len(bytes.TrimSpace(respData)) == 0 && postResp.StatusCode >= 200 && postResp.StatusCode < 400 {
+			if sj, ok := g.cookieJar.(*SimpleCookieJar); ok {
+				sj.ClearStateCookies()
+			}
 			g.log("INFO", "Fastly anti-bot challenge solved (clearance cookie granted)")
 			return nil
 		}
@@ -743,6 +873,9 @@ func (g *GuardianService) solveFastlyChallenge(ctx context.Context, targetURL st
 			return err
 		}
 		if status, _ := parsed["status"].(string); strings.EqualFold(status, "success") || strings.EqualFold(status, "ok") {
+			if sj, ok := g.cookieJar.(*SimpleCookieJar); ok {
+				sj.ClearStateCookies()
+			}
 			g.log("INFO", "Fastly anti-bot challenge solved successfully")
 			return nil
 		}
@@ -1444,7 +1577,7 @@ func (g *GuardianService) FetchUserInfo(ctx context.Context, accessToken string)
 		if err != nil {
 			return nil, err
 		}
-		applyMozillaHeaders(req)
+		applyGuardianHeaders(req)
 		req.Header.Set("Authorization", "Bearer "+accessToken)
 		return req, nil
 	})
@@ -1486,7 +1619,7 @@ func (g *GuardianService) ActivateGuardian(ctx context.Context, accessToken stri
 		if err != nil {
 			return nil, err
 		}
-		applyMozillaHeaders(req)
+		applyGuardianHeaders(req)
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+accessToken)
 		return req, nil
@@ -1531,7 +1664,7 @@ func (g *GuardianService) FetchProxyPass(ctx context.Context, accessToken string
 		if err != nil {
 			return nil, err
 		}
-		applyMozillaHeaders(req)
+		applyGuardianHeaders(req)
 		req.Header.Set("Authorization", "Bearer "+accessToken)
 		return req, nil
 	})
