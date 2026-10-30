@@ -473,4 +473,85 @@ export function resolveServerSelection(
   return { server: best, usedFallback };
 }
 
+/**
+ * Unwraps error values from both Wails v2 (which rejects Promises with plain strings)
+ * and standard JS Error objects, returning a localized message and whether a 6-digit OTP is needed.
+ */
+export function extractAuthErrorMessage(
+  err: unknown,
+  lang: 'fa' | 'en' = 'fa'
+): { message: string; requiresOtp: boolean } {
+  let rawMsg = '';
+  if (typeof err === 'string') {
+    rawMsg = err.trim();
+  } else if (err instanceof Error && err.message) {
+    rawMsg = err.message.trim();
+  } else if (err && typeof err === 'object' && 'message' in err && typeof (err as { message?: unknown }).message === 'string') {
+    rawMsg = ((err as { message: string }).message || '').trim();
+  }
 
+  const lower = rawMsg.toLowerCase();
+  const requiresOtp =
+    lower.includes('verification code') ||
+    lower.includes('verify_code') ||
+    lower.includes('email-2fa');
+
+  if (requiresOtp) {
+    return {
+      requiresOtp: true,
+      message:
+        lang === 'fa'
+          ? 'موزیلا کد تایید ۶ رقمی به ایمیل شما ارسال کرد. لطفاً کد را وارد کنید:'
+          : 'Mozilla sent a 6-digit verification code to your email. Please enter it below:',
+    };
+  }
+
+  if (lower.includes('errno 103') || lower.includes('incorrect password')) {
+    return {
+      requiresOtp: false,
+      message:
+        lang === 'fa'
+          ? 'رمز عبور واردشده برای این اکانت فایرفاکس اشتباه است.'
+          : 'Incorrect password for this Firefox Account.',
+    };
+  }
+
+  if (lower.includes('errno 102') || lower.includes('unknown account')) {
+    return {
+      requiresOtp: false,
+      message:
+        lang === 'fa'
+          ? 'اکانتی با این ایمیل در موزیلا یافت نشد. ابتدا در سایت رسمی موزیلا ثبت‌نام کنید.'
+          : 'No Firefox Account found with this email. Please register on Mozilla first.',
+    };
+  }
+
+  if (lower.includes('errno 114') || lower.includes('too many requests')) {
+    return {
+      requiresOtp: false,
+      message:
+        lang === 'fa'
+          ? 'تعداد تلاش‌ها بیش از حد مجاز بوده است. لطفاً چند دقیقه صبر کنید و دوباره امتحان کنید.'
+          : 'Too many login attempts. Please wait a few minutes and try again.',
+    };
+  }
+
+  if (lower.includes('http 406') || lower.includes('fastly anti-bot')) {
+    return {
+      requiresOtp: false,
+      message:
+        lang === 'fa'
+          ? `محدودیت فایروال Fastly (HTTP 406): در صورت تکرار، در تب «تنظیمات تونل» یک پروکسی در بخش Control-Plane Proxy تنظیم کنید. (${rawMsg})`
+          : rawMsg,
+    };
+  }
+
+  if (rawMsg) {
+    return { requiresOtp: false, message: rawMsg };
+  }
+
+  return {
+    requiresOtp: false,
+    message: lang === 'fa' ? 'خطا در احراز هویت اکانت فایرفاکس' : 'Authentication failed',
+  };
+}

@@ -410,6 +410,11 @@ class WailsRuntimeBridge {
     // Production Native Wails Path: performs real FxA PBKDF2-SHA256 + HKDF authentication and writes to data/account.bin
     if (this.nativeApp && typeof this.nativeApp.AddAccountToPool === 'function') {
       const verifiedUser = await this.nativeApp.AddAccountToPool(trimmedEmail, password);
+      if (verifiedUser && verifiedUser.requiresVerification) {
+        this.pendingEmail = trimmedEmail;
+        this.pendingIsSignUp = false;
+        return verifiedUser;
+      }
       const keyDigest = await this.deriveDeterministicKeyHex(trimmedEmail, password);
       const existingIdx = this.accountPool.findIndex((a) => a.email.toLowerCase() === trimmedEmail.toLowerCase());
       if (existingIdx >= 0) {
@@ -533,24 +538,43 @@ class WailsRuntimeBridge {
   }
 
   async login(email: string, password: string): Promise<UserInfo> {
+    const trimmedEmail = email.trim();
     if (this.nativeApp) {
-      const resp = await this.nativeApp.Login(email, password);
+      const resp = await this.nativeApp.Login(trimmedEmail, password);
       if (resp) {
+        if (resp.requiresVerification) {
+          this.pendingEmail = trimmedEmail;
+          this.pendingIsSignUp = false;
+          return resp;
+        }
+        const keyDigest = await this.deriveDeterministicKeyHex(trimmedEmail, password);
+        if (!this.accountPool.some((a) => a.email.toLowerCase() === trimmedEmail.toLowerCase())) {
+          this.accountPool.push({
+            id: 'acc-' + Date.now().toString(36),
+            email: trimmedEmail,
+            token: keyDigest,
+            quotaGB: 50,
+            active: true,
+            addedAt: nowTimeStr(),
+          });
+        }
         this.currentUser = resp;
+        this.status.quotaMaxBytes = resp.quotaMaxBytes;
+        this.status.quotaRemainingBytes = resp.quotaRemainingBytes;
         this.savePersistence();
       }
       return resp;
     }
-    const derivedToken = await this.deriveDeterministicKeyHex(email, password);
-    this.addLog('INFO', `Deriving FxA quickStretch (PBKDF2-SHA256 1000 rounds + HKDF) for ${email}`);
-    this.addLog('INFO', `Authenticated ${email} and saved session to binary store ${ACCOUNT_BIN_PATH}`);
-    this.pendingEmail = email;
+    const derivedToken = await this.deriveDeterministicKeyHex(trimmedEmail, password);
+    this.addLog('INFO', `Deriving FxA quickStretch (PBKDF2-SHA256 1000 rounds + HKDF) for ${trimmedEmail}`);
+    this.addLog('INFO', `Authenticated ${trimmedEmail} and saved session to binary store ${ACCOUNT_BIN_PATH}`);
+    this.pendingEmail = trimmedEmail;
     this.pendingIsSignUp = false;
 
-    if (!this.accountPool.some((a) => a.email.toLowerCase() === email.toLowerCase())) {
+    if (!this.accountPool.some((a) => a.email.toLowerCase() === trimmedEmail.toLowerCase())) {
       this.accountPool.push({
         id: 'acc-' + Date.now().toString(36),
-        email,
+        email: trimmedEmail,
         token: derivedToken,
         quotaGB: 50,
         active: true,
@@ -559,7 +583,7 @@ class WailsRuntimeBridge {
     }
 
     const user: UserInfo = {
-      email,
+      email: trimmedEmail,
       uid: 'fxa-' + derivedToken.slice(0, 8),
       verified: true,
       requiresVerification: false,
@@ -619,8 +643,23 @@ class WailsRuntimeBridge {
   async verifyEmailCode(code: string): Promise<UserInfo> {
     if (this.nativeApp) {
       const resp = await this.nativeApp.VerifyEmailCode(code);
-      this.currentUser = resp;
-      this.savePersistence();
+      if (resp) {
+        const verifiedEmail = (resp.email || this.pendingEmail || '').trim();
+        if (verifiedEmail && !this.accountPool.some((a) => a.email.toLowerCase() === verifiedEmail.toLowerCase())) {
+          this.accountPool.push({
+            id: 'acc-' + Date.now().toString(36),
+            email: verifiedEmail,
+            token: resp.uid || 'fxa-verified',
+            quotaGB: 50,
+            active: true,
+            addedAt: nowTimeStr(),
+          });
+        }
+        this.currentUser = resp;
+        this.status.quotaMaxBytes = resp.quotaMaxBytes;
+        this.status.quotaRemainingBytes = resp.quotaRemainingBytes;
+        this.savePersistence();
+      }
       return resp;
     }
     const endpoint = this.pendingIsSignUp ? '/v1/recovery_email/verify_code' : '/v1/session/verify_code';

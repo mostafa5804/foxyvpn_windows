@@ -246,6 +246,13 @@ func (a *App) Login(email, password string) (*UserInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
+	a.mu.RLock()
+	cpProxy := a.settings.ControlPlaneProxy
+	a.mu.RUnlock()
+	if strings.TrimSpace(cpProxy) != "" {
+		_ = a.authSvc.SetControlPlaneProxy(cpProxy)
+	}
+
 	resp, err := a.authSvc.Login(ctx, email, password)
 	if err != nil {
 		a.appendLog("ERROR", fmt.Sprintf("FxA Login failed: %v", err))
@@ -268,7 +275,14 @@ func (a *App) Login(email, password string) (*UserInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	return a.setAuthenticatedUser(saved, ent, 1), nil
+	count := len(saved.PoolAccounts)
+	if len(saved.TokenPool) > count {
+		count = len(saved.TokenPool)
+	}
+	if count < 1 {
+		count = 1
+	}
+	return a.setAuthenticatedUser(saved, ent, count), nil
 }
 
 // AddAccountToPool authenticates a secondary Firefox Account via real FxA PBKDF2-SHA256 + HKDF and saves it into data/account.bin.
@@ -276,8 +290,25 @@ func (a *App) AddAccountToPool(email, password string) (*UserInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
+	a.mu.RLock()
+	cpProxy := a.settings.ControlPlaneProxy
+	a.mu.RUnlock()
+	if strings.TrimSpace(cpProxy) != "" {
+		_ = a.authSvc.SetControlPlaneProxy(cpProxy)
+	}
+
 	saved, ent, err := a.authSvc.AddAccountToPool(ctx, email, password)
 	if err != nil {
+		if errors.Is(err, auth.ErrVerificationNeede) {
+			a.appendLog("INFO", fmt.Sprintf("6-digit verification code sent to %s for pool activation", email))
+			return &UserInfo{
+				Email:                email,
+				Verified:             false,
+				RequiresVerification: true,
+				QuotaMaxBytes:        auth.DefaultMonthlyAllowance,
+				QuotaRemainingBytes:  auth.DefaultMonthlyAllowance,
+			}, nil
+		}
 		a.appendLog("ERROR", fmt.Sprintf("Pool account authentication failed for %s: %v", email, err))
 		return nil, err
 	}
@@ -312,7 +343,7 @@ func (a *App) RegisterAccount(email, password string) (*UserInfo, error) {
 	}, nil
 }
 
-// VerifyEmailCode submits the 6-digit email code for either Sign-In or In-App Sign-Up, then activates the 50 GB monthly allowance.
+// VerifyEmailCode submits the 6-digit email code for either Sign-In, Pool Add, or In-App Sign-Up, then activates the 50 GB monthly allowance.
 func (a *App) VerifyEmailCode(code string) (*UserInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -322,7 +353,14 @@ func (a *App) VerifyEmailCode(code string) (*UserInfo, error) {
 		a.appendLog("ERROR", fmt.Sprintf("Email code verification failed: %v", err))
 		return nil, err
 	}
-	return a.setAuthenticatedUser(saved, ent, 1), nil
+	count := len(saved.PoolAccounts)
+	if len(saved.TokenPool) > count {
+		count = len(saved.TokenPool)
+	}
+	if count < 1 {
+		count = 1
+	}
+	return a.setAuthenticatedUser(saved, ent, count), nil
 }
 
 // ImportTokenPool authenticates using one or more FxA hex sessionTokens and enables automatic rotation when 50 GB is exhausted.

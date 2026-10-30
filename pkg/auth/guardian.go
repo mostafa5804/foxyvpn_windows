@@ -379,8 +379,34 @@ func hawkHeader(method, rawURL, hawkID string, hawkKey []byte, payload string) (
 }
 
 func applyMozillaHeaders(req *http.Request) {
-	req.Header.Set("User-Agent", MozillaVPNUserAgent)
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", SolverUserAgent)
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	if req.URL != nil && strings.Contains(strings.ToLower(req.URL.Host), "firefox.com") {
+		req.Header.Set("Origin", "https://accounts.firefox.com")
+		req.Header.Set("Referer", "https://accounts.firefox.com/")
+		req.Header.Set("Sec-Fetch-Dest", "empty")
+		req.Header.Set("Sec-Fetch-Mode", "cors")
+		req.Header.Set("Sec-Fetch-Site", "same-site")
+	}
+}
+
+func (g *GuardianService) promoteCookiesToRoot(rawURL string, cookies []*http.Cookie) {
+	if g.cookieJar == nil || len(cookies) == 0 {
+		return
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return
+	}
+	rootURL := &url.URL{Scheme: u.Scheme, Host: u.Host, Path: "/"}
+	var promoted []*http.Cookie
+	for _, c := range cookies {
+		cp := *c
+		cp.Path = "/"
+		promoted = append(promoted, &cp)
+	}
+	g.cookieJar.SetCookies(rootURL, promoted)
 }
 
 // doWithChallenge executes an HTTP request and transparently solves Fastly HTTP 406 challenges.
@@ -394,43 +420,69 @@ func (g *GuardianService) doWithChallenge(ctx context.Context, buildReq func() (
 		if err != nil {
 			return nil, err
 		}
+		g.promoteCookiesToRoot(req.URL.String(), resp.Cookies())
 		if resp.StatusCode != http.StatusNotAcceptable {
 			return resp, nil
 		}
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		challengeBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
 		_ = resp.Body.Close()
 
 		g.log("WARN", "Fastly anti-bot challenge triggered (HTTP 406), solving challenge (attempt %d/%d)...", attempt, maxChallengeAttempts)
-		if solveErr := g.solveFastlyChallenge(ctx, req.URL.Scheme+"://"+req.URL.Host); solveErr != nil {
+		if solveErr := g.solveFastlyChallenge(ctx, req.URL.String(), string(challengeBytes)); solveErr != nil {
 			g.log("WARN", "Fastly challenge solver warning: %v", solveErr)
+		}
+		if attempt < maxChallengeAttempts {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Duration(attempt*150) * time.Millisecond):
+			}
 		}
 	}
 	return nil, fmt.Errorf("Fastly anti-bot challenge persisted after %d attempts (HTTP 406)", maxChallengeAttempts)
 }
 
 // solveFastlyChallenge implements the Fastly PoW/PAT/ClientMetrics challenge solver.
-func (g *GuardianService) solveFastlyChallenge(ctx context.Context, baseHost string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseHost+"/", nil)
+func (g *GuardianService) solveFastlyChallenge(ctx context.Context, targetURL string, initialPage string) error {
+	u, err := url.Parse(targetURL)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", SolverUserAgent)
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	baseHost := u.Scheme + "://" + u.Host
+	page := initialPage
 
-	resp, err := g.httpClient.Do(req)
-	if err != nil {
-		return err
+	// If the 406 response body did not embed the /_fs-ch- challenge HTML directly, probe targetURL and baseHost
+	if !strings.Contains(page, "/_fs-ch-") {
+		for _, probeURL := range []string{targetURL, baseHost + "/"} {
+			req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+			if reqErr != nil {
+				continue
+			}
+			req.Header.Set("User-Agent", SolverUserAgent)
+			req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+			req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+
+			resp, doErr := g.httpClient.Do(req)
+			if doErr != nil {
+				continue
+			}
+			g.promoteCookiesToRoot(probeURL, resp.Cookies())
+			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+			_ = resp.Body.Close()
+			if strings.Contains(string(bodyBytes), "/_fs-ch-") {
+				page = string(bodyBytes)
+				break
+			}
+		}
 	}
-	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
-	_ = resp.Body.Close()
-	page := string(bodyBytes)
 
 	if !strings.Contains(page, "/_fs-ch-") {
-		return nil
+		return errors.New("Fastly challenge prefix not found in 406 response or host root")
 	}
 	prefix := challengePrefixRegex.FindString(page)
+	prefix = strings.TrimSuffix(prefix, "/script.js")
 	if prefix == "" {
-		return errors.New("Fastly challenge prefix not found in HTML")
+		return errors.New("Fastly challenge prefix regex did not match")
 	}
 	prefixURL := baseHost + prefix
 
@@ -439,10 +491,18 @@ func (g *GuardianService) solveFastlyChallenge(ctx context.Context, baseHost str
 		return err
 	}
 	scriptReq.Header.Set("User-Agent", SolverUserAgent)
+	scriptReq.Header.Set("Accept", "*/*")
+	scriptReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	scriptReq.Header.Set("Referer", targetURL)
+	scriptReq.Header.Set("Sec-Fetch-Dest", "script")
+	scriptReq.Header.Set("Sec-Fetch-Mode", "no-cors")
+	scriptReq.Header.Set("Sec-Fetch-Site", "same-origin")
+
 	scriptResp, err := g.httpClient.Do(scriptReq)
 	if err != nil {
 		return err
 	}
+	g.promoteCookiesToRoot(targetURL, scriptResp.Cookies())
 	scriptBytes, _ := io.ReadAll(io.LimitReader(scriptResp.Body, 512*1024))
 	_ = scriptResp.Body.Close()
 
@@ -472,13 +532,17 @@ func (g *GuardianService) solveFastlyChallenge(ctx context.Context, baseHost str
 				if !ok {
 					return fmt.Errorf("no PoW solution found for %s", baseStr)
 				}
-				answers = append(answers, map[string]any{
+				powAns := map[string]any{
 					"ty":      "pow",
 					"base":    baseStr,
 					"answer":  ans,
 					"hmac":    hmacStr,
 					"expires": expiresStr,
-				})
+				}
+				if sc, hasSC := dataMap["sc"]; hasSC {
+					powAns["sc"] = sc
+				}
+				answers = append(answers, powAns)
 			case "pat":
 				answers = append(answers, map[string]any{
 					"ty":   "pat",
@@ -493,12 +557,18 @@ func (g *GuardianService) solveFastlyChallenge(ctx context.Context, baseHost str
 						"bot_kind":     nil,
 					},
 					"browser_metrics": map[string]any{
-						"client_data": "{}",
+						"client_data": `{"userAgent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:135.0) Gecko/20100101 Firefox/135.0","language":"en-US","languages":["en-US","en"],"platform":"Win32","hardwareConcurrency":8,"maxTouchPoints":0,"cookieEnabled":true}`,
 						"error_trace": nil,
 					},
 					"detector_results": map[string]any{},
 					"v":                2,
 				})
+			default:
+				if ty != "" {
+					answers = append(answers, map[string]any{
+						"ty": ty,
+					})
+				}
 			}
 		}
 
@@ -511,22 +581,34 @@ func (g *GuardianService) solveFastlyChallenge(ctx context.Context, baseHost str
 			return err
 		}
 		postReq.Header.Set("Content-Type", "application/json")
-		postReq.Header.Set("Accept", "application/json")
+		postReq.Header.Set("Accept", "application/json, text/plain, */*")
+		postReq.Header.Set("Accept-Language", "en-US,en;q=0.9")
 		postReq.Header.Set("User-Agent", SolverUserAgent)
 		postReq.Header.Set("Origin", baseHost)
+		postReq.Header.Set("Referer", targetURL)
+		postReq.Header.Set("Sec-Fetch-Dest", "empty")
+		postReq.Header.Set("Sec-Fetch-Mode", "cors")
+		postReq.Header.Set("Sec-Fetch-Site", "same-origin")
 
 		postResp, err := g.httpClient.Do(postReq)
 		if err != nil {
 			return err
 		}
+		g.promoteCookiesToRoot(targetURL, postResp.Cookies())
 		respData, _ := io.ReadAll(io.LimitReader(postResp.Body, 64*1024))
 		_ = postResp.Body.Close()
+
+		// Some Fastly edge nodes return 200 OK with empty body or redirect once clearance cookie is set
+		if len(bytes.TrimSpace(respData)) == 0 && postResp.StatusCode >= 200 && postResp.StatusCode < 400 {
+			g.log("INFO", "Fastly anti-bot challenge solved (cookie granted)")
+			return nil
+		}
 
 		var parsed map[string]any
 		if err := json.Unmarshal(respData, &parsed); err != nil {
 			return err
 		}
-		if status, _ := parsed["status"].(string); status == "success" {
+		if status, _ := parsed["status"].(string); strings.EqualFold(status, "success") || strings.EqualFold(status, "ok") {
 			g.log("INFO", "Fastly anti-bot challenge solved successfully")
 			return nil
 		}
@@ -548,16 +630,47 @@ func (g *GuardianService) solveFastlyChallenge(ctx context.Context, baseHost str
 }
 
 func solvePoW(baseStr, targetHex string) (string, bool) {
-	target, err := hex.DecodeString(targetHex)
+	target, err := hex.DecodeString(strings.TrimSpace(targetHex))
 	if err != nil || len(target) != 32 {
 		return "", false
 	}
+	baseBytes := []byte(baseStr)
+	// 1. Check 2-character suffixes first (most common Fastly PoW difficulty)
+	buf2 := make([]byte, len(baseBytes)+2)
+	copy(buf2, baseBytes)
 	for i := 0; i < len(powAlphabet); i++ {
+		buf2[len(baseBytes)] = powAlphabet[i]
 		for j := 0; j < len(powAlphabet); j++ {
-			suffix := string([]byte{powAlphabet[i], powAlphabet[j]})
-			sum := sha256.Sum256([]byte(baseStr + suffix))
+			buf2[len(baseBytes)+1] = powAlphabet[j]
+			sum := sha256.Sum256(buf2)
 			if bytes.Equal(sum[:], target) {
-				return suffix, true
+				return string(buf2[len(baseBytes):]), true
+			}
+		}
+	}
+	// 2. Check 1-character suffixes
+	buf1 := make([]byte, len(baseBytes)+1)
+	copy(buf1, baseBytes)
+	for i := 0; i < len(powAlphabet); i++ {
+		buf1[len(baseBytes)] = powAlphabet[i]
+		sum := sha256.Sum256(buf1)
+		if bytes.Equal(sum[:], target) {
+			return string(buf1[len(baseBytes):]), true
+		}
+	}
+	// 3. Check 3-character suffixes
+	buf3 := make([]byte, len(baseBytes)+3)
+	copy(buf3, baseBytes)
+	for i := 0; i < len(powAlphabet); i++ {
+		buf3[len(baseBytes)] = powAlphabet[i]
+		for j := 0; j < len(powAlphabet); j++ {
+			buf3[len(baseBytes)+1] = powAlphabet[j]
+			for k := 0; k < len(powAlphabet); k++ {
+				buf3[len(baseBytes)+2] = powAlphabet[k]
+				sum := sha256.Sum256(buf3)
+				if bytes.Equal(sum[:], target) {
+					return string(buf3[len(baseBytes):]), true
+				}
 			}
 		}
 	}
@@ -873,6 +986,50 @@ func (g *GuardianService) CompleteSessionLogin(ctx context.Context, email, uid, 
 
 	saved.QuotaMaxBytes = entitlement.MaxBytes
 	saved.QuotaRemainingBytes = entitlement.QuotaRemaining
+
+	// Upsert authenticated account into PoolAccounts and TokenPool so both direct Login and 6-digit OTP verification persist to the pool
+	if email != "" && !strings.HasSuffix(email, "@firefox.com") {
+		foundAcc := false
+		for i := range saved.PoolAccounts {
+			if strings.EqualFold(saved.PoolAccounts[i].Email, email) {
+				saved.PoolAccounts[i].SessionToken = sessionToken
+				saved.PoolAccounts[i].AccessToken = saved.AccessToken
+				saved.PoolAccounts[i].UID = uid
+				saved.PoolAccounts[i].QuotaRemainingBytes = entitlement.QuotaRemaining
+				saved.PoolAccounts[i].Active = true
+				foundAcc = true
+			} else {
+				saved.PoolAccounts[i].Active = false
+			}
+		}
+		if !foundAcc {
+			saved.PoolAccounts = append(saved.PoolAccounts, PoolAccountRecord{
+				ID:                  fmt.Sprintf("acc-%d", time.Now().UnixNano()),
+				Email:               email,
+				UID:                 uid,
+				SessionToken:        sessionToken,
+				AccessToken:         saved.AccessToken,
+				QuotaGB:             50,
+				QuotaRemainingBytes: entitlement.QuotaRemaining,
+				Active:              true,
+				AddedAt:             time.Now().Format("15:04:05"),
+			})
+		}
+		hasTok := false
+		for _, t := range saved.TokenPool {
+			if t == sessionToken {
+				hasTok = true
+				break
+			}
+		}
+		if !hasTok && sessionToken != "" {
+			saved.TokenPool = append(saved.TokenPool, sessionToken)
+		}
+		g.mu.Lock()
+		g.tokenPool = append([]string(nil), saved.TokenPool...)
+		g.mu.Unlock()
+	}
+
 	_ = g.SaveTokens(saved)
 
 	return saved, entitlement, nil

@@ -228,4 +228,21 @@ test('resolveServerSelection picks lowest-latency server and flags fallback when
   assert.equal(fallbackPick.usedFallback, true);
 });
 
+test('extractAuthErrorMessage unwraps Wails plain string errors, detects 6-digit OTP requirements, and localizes FxA errors', async () => {
+  const { extractAuthErrorMessage } = await import('./vpnLogic.ts');
 
+  // 1. Wails string rejection for 6-digit OTP verification
+  const otpRes = extractAuthErrorMessage('email 6-digit verification code required', 'fa');
+  assert.equal(otpRes.requiresOtp, true);
+  assert.ok(otpRes.message.includes('۶ رقمی'));
+
+  // 2. Wails string rejection for incorrect password (errno 103)
+  const wrongPw = extractAuthErrorMessage('FxA error (HTTP 400, errno 103): Incorrect password', 'fa');
+  assert.equal(wrongPw.requiresOtp, false);
+  assert.ok(wrongPw.message.includes('رمز عبور'));
+
+  // 3. Fastly HTTP 406 challenge error string
+  const fastlyErr = extractAuthErrorMessage('Fastly anti-bot challenge persisted after 6 attempts (HTTP 406)', 'fa');
+  assert.equal(fastlyErr.requiresOtp, false);
+  assert.ok(fastlyErr.message.includes('HTTP 406'));
+});

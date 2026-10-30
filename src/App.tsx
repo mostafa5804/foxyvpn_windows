@@ -31,6 +31,7 @@ import {
   APP_VERSION,
   FIFTY_GB_BYTES,
   calculateQuotaSummary,
+  extractAuthErrorMessage,
   formatBytes,
   formatRate,
   formatUptime,
@@ -485,7 +486,8 @@ export default function App() {
             : 'Code verified and account saved automatically'
         );
       } catch (err: unknown) {
-        setAuthError(err instanceof Error ? err.message : 'Verification failed');
+        const parsed = extractAuthErrorMessage(err, lang);
+        setAuthError(parsed.message);
       } finally {
         setAuthLoading(false);
       }
@@ -546,16 +548,12 @@ export default function App() {
       setAuthEmail('');
       setAuthPassword('');
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Authentication failed';
-      if (msg.toLowerCase().includes('verification code')) {
+      const parsed = extractAuthErrorMessage(err, lang);
+      if (parsed.requiresOtp) {
         setNeedsOtpCode(true);
-        setAuthSuccess(
-          lang === 'fa'
-            ? 'موزیلا کد تایید ۶ رقمی به ایمیل شما ارسال کرد. لطفاً کد را وارد کنید:'
-            : 'Mozilla sent a 6-digit verification code to your email. Please enter it below:'
-        );
+        setAuthSuccess(parsed.message);
       } else {
-        setAuthError(msg);
+        setAuthError(parsed.message);
       }
     } finally {
       setAuthLoading(false);
