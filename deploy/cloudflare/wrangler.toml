@@ -1,0 +1,7 @@
+name = "foxyvpn-guardian-relay"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+# Environment variables
+[vars]
+RELAY_SECRET = "foxyvpn_secret_relay_key"

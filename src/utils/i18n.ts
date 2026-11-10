@@ -168,6 +168,21 @@ export interface Translations {
   sessionBackupDesc: string;
   exportSessionBtn: string;
   importSessionBtn: string;
+
+  // Relay (HTTP 451 bypass)
+  relayTitle: string;
+  relaySubtitle: string;
+  relayEnableLabel: string;
+  relaySharedLabel: string;
+  relaySharedDesc: string;
+  customRelayLabel: string;
+  customRelayPlaceholder: string;
+  customRelayDesc: string;
+  testRelayBtn: string;
+  testingRelay: string;
+  relayDeployGuideBtn: string;
+  relayHelpWorkerTitle: string;
+  relayAutoDeployBtn: string;
   sessionSavedToast: string;
   sessionRestoredToast: string;
   portableUpdateNotice: string;
@@ -206,7 +221,7 @@ export interface Translations {
 export const translations: Record<Language, Translations> = {
   fa: {
     appName: 'FoxyVPN Windows',
-    version: '1.0.7',
+    version: '1.1.0',
     dashboard: 'داشبورد',
     auth: 'اکانت و ورود',
     settings: 'تنظیمات تونل',
@@ -366,6 +381,19 @@ export const translations: Record<Language, Translations> = {
     sessionBackupDesc: 'اکانت‌ها و توکن‌های شما به صورت رمزنگاری‌شده در فایل باینری data/account.bin ذخیره می‌شوند تا هنگام آپدیت نسخه پرتابل یا نصبی نیازی به لاگین مجدد نباشد.',
     exportSessionBtn: 'پشتیبان‌گیری فایل account.bin',
     importSessionBtn: 'بازیابی از account.bin',
+    relayTitle: 'سرور رله موزیلا (رفع تحریم ۴۵۱)',
+    relaySubtitle: 'جهت عبور از خطای منطقه ای HTTP 451: unavailable_in_region موزیلا برای گرفتن مجوز اتصال',
+    relayEnableLabel: 'فعال‌سازی سیستم رله برای مجوز موزیلا',
+    relaySharedLabel: 'استفاده خودکار از رله‌های اشتراکی ابری (پیشنهادی)',
+    relaySharedDesc: 'در صورت مسدود بودن درخواست به موزیلا، کلاینت خودکار از رله‌های معتبر برای دریافت توکن استفاده می‌کند (ترافیک اصلی اینترنت مستقیماً از تونل MASQUE رد خواهد شد).',
+    customRelayLabel: 'آدرس رله اختصاصی ورکر کلادفلر (Cloudflare Worker)',
+    customRelayPlaceholder: 'https://my-relay.workers.dev?secret=123456 یا https://relay.domain.com?secret=123456',
+    customRelayDesc: 'اگر ورکر کلادفلر شخصی ساخته‌اید، آدرس workers.dev آن را همراه با secret وارد کنید تا درخواست‌های توکن موزیلا مستقیماً از آن ارسال شوند.',
+    testRelayBtn: 'تست اتصال و پینگ رله',
+    testingRelay: 'در حال بررسی اتصال...',
+    relayDeployGuideBtn: 'راهنمای راه‌اندازی رله در کلادفلر',
+    relayHelpWorkerTitle: 'استقرار ورکر کلادفلر (Cloudflare Worker)',
+    relayAutoDeployBtn: 'ساخت خودکار ورکر با دستور deploy',
     sessionSavedToast: 'فایل باینری data/account.bin با موفقیت ذخیره شد',
     sessionRestoredToast: 'اکانت‌ها از فایل باینری data/account.bin بازیابی شدند',
     portableUpdateNotice: 'پشتیبانی از آپدیت بدون لاگین مجدد (Portable & Setup)',
@@ -401,7 +429,7 @@ export const translations: Record<Language, Translations> = {
   },
   en: {
     appName: 'FoxyVPN Windows',
-    version: '1.0.7',
+    version: '1.1.0',
     dashboard: 'Dashboard',
     auth: 'Account',
     settings: 'Tunnel Settings',
@@ -561,6 +589,19 @@ export const translations: Record<Language, Translations> = {
     sessionBackupDesc: 'Accounts and session tokens are automatically encrypted into data/account.bin (DPAPI + AES-256-GCM) so Portable and Setup updates never require signing in again.',
     exportSessionBtn: 'Export data/account.bin',
     importSessionBtn: 'Restore account.bin',
+    relayTitle: 'Mozilla Guardian Relay (HTTP 451 Bypass)',
+    relaySubtitle: 'Bypasses Mozilla regional block (HTTP 451: unavailable_in_region) for license authorization',
+    relayEnableLabel: 'Enable Mozilla Guardian Relay',
+    relaySharedLabel: 'Automatic Shared Cloud Relays (Recommended)',
+    relaySharedDesc: 'Automatically falls back to verified global relay proxies when Mozilla blocks direct regional access, while main VPN traffic runs directly through Fastly MASQUE.',
+    customRelayLabel: 'Custom Cloudflare Worker Relay URL',
+    customRelayPlaceholder: 'https://my-relay.workers.dev?secret=123456 or https://relay.domain.com?secret=123456',
+    customRelayDesc: 'Enter your personal Cloudflare Worker URL including the secret key to proxy Mozilla license requests.',
+    testRelayBtn: 'Test Relay Connection',
+    testingRelay: 'Testing...',
+    relayDeployGuideBtn: 'Cloudflare Worker Relay Guide',
+    relayHelpWorkerTitle: 'Deploy on Cloudflare Workers',
+    relayAutoDeployBtn: 'Automated Deploy via Wrangler',
     sessionSavedToast: 'Binary store data/account.bin saved automatically',
     sessionRestoredToast: 'Account restored from data/account.bin without re-login',
     portableUpdateNotice: 'Zero Re-Login Updates (Portable & Installer)',

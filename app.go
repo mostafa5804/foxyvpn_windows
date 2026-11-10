@@ -16,7 +16,7 @@ import (
 	"github.com/mostafa5804/foxyvpn_windows/pkg/vpn"
 )
 
-const AppVersion = "1.0.7"
+const AppVersion = "1.1.0"
 
 // UserInfo represents the authenticated Firefox Account and its 50 GB monthly Guardian quota.
 type UserInfo struct {
@@ -79,6 +79,9 @@ type ClientSettings struct {
 	AllowLan          bool     `json:"allowLan"`
 	ControlPlaneProxy string   `json:"controlPlaneProxy"`
 	EdgeOverrideIP    string   `json:"edgeOverrideIp"`
+	UseRelay          bool     `json:"useRelay"`
+	RelayURL          string   `json:"relayUrl"`
+	UseSharedRelays   bool     `json:"useSharedRelays"`
 }
 
 // UpdateCheckResult reports whether a newer GitHub Release exists.
@@ -127,6 +130,9 @@ func NewApp() *App {
 			LocalSocksPort:    1080,
 			LocalHttpPort:     8080,
 			AllowLan:          false,
+			UseRelay:          true,
+			RelayURL:          "",
+			UseSharedRelays:   true,
 		},
 	}
 	app.authSvc = auth.NewGuardianService(app.appendLog)
@@ -847,8 +853,78 @@ func (a *App) UpdateSettings(s ClientSettings) error {
 			return err
 		}
 	}
-	a.appendLog("INFO", fmt.Sprintf("Updated settings: Mode=%s, Proto=%s, TLS-Split=%s, DoH=%s, MTU=%d, SplitTunnel=%s (%d apps)", s.Mode, s.TransportProtocol, s.TlsSplitMode, s.DohProvider, s.MTU, s.SplitTunnelMode, len(s.SplitTunnelApps)))
+	a.authSvc.SetRelayConfig(s.UseRelay, s.RelayURL, s.UseSharedRelays)
+	a.appendLog("INFO", fmt.Sprintf("Updated settings: Mode=%s, Proto=%s, TLS-Split=%s, DoH=%s, MTU=%d, Relay=%v (shared=%v), SplitTunnel=%s (%d apps)", s.Mode, s.TransportProtocol, s.TlsSplitMode, s.DohProvider, s.MTU, s.UseRelay, s.UseSharedRelays, s.SplitTunnelMode, len(s.SplitTunnelApps)))
 	return nil
+}
+
+// TestRelayConnection tests the accessibility and latency of a custom or shared Mozilla Guardian relay.
+func (a *App) TestRelayConnection(relayURL string) (map[string]any, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	if strings.TrimSpace(relayURL) == "" {
+		a.mu.RLock()
+		relayURL = a.settings.RelayURL
+		a.mu.RUnlock()
+	}
+	if strings.TrimSpace(relayURL) == "" {
+		return map[string]any{
+			"ok":      false,
+			"latency": "0ms",
+			"error":   "آدرس رله مشخص نشده است",
+		}, errors.New("آدرس رله مشخص نشده است")
+	}
+
+	ok, latency, err := a.authSvc.TestRelayEndpoint(ctx, relayURL)
+	res := map[string]any{
+		"ok":      ok,
+		"latency": latency,
+	}
+	if err != nil {
+		res["error"] = err.Error()
+		return res, err
+	}
+	return res, nil
+}
+
+// GetLanIPs returns all active local IPv4 addresses (Wi-Fi and Ethernet) for LAN proxy sharing.
+func (a *App) GetLanIPs() []string {
+	var ips []string
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return []string{"127.0.0.1"}
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip == nil || ip.IsLoopback() {
+				continue
+			}
+			ip = ip.To4()
+			if ip == nil {
+				continue
+			}
+			ips = append(ips, ip.String())
+		}
+	}
+	if len(ips) == 0 {
+		return []string{"127.0.0.1"}
+	}
+	return ips
 }
 
 // GetLogs returns the connection log buffer.

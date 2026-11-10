@@ -387,3 +387,16 @@ func runHiddenCmd(name string, args ...string) error {
 	return cmd.Run()
 }
 
+// allowFirewallInboundPorts opens Windows Defender Firewall for inbound TCP connections on specified ports (e.g. "8080,1080") when LAN sharing is enabled.
+func allowFirewallInboundPorts(ruleName, ports string) error {
+	_ = removeFirewallRule(ruleName)
+	return runHiddenCmd("netsh", "advfirewall", "firewall", "add", "rule",
+		fmt.Sprintf("name=%s", ruleName), "dir=in", "action=allow", "protocol=TCP", fmt.Sprintf("localport=%s", ports), "enable=yes")
+}
+
+// removeFirewallRule deletes a named firewall rule.
+func removeFirewallRule(ruleName string) error {
+	return runHiddenCmd("netsh", "advfirewall", "firewall", "delete", "rule", fmt.Sprintf("name=%s", ruleName))
+}
+
+

@@ -115,9 +115,9 @@ test('filterAndSortServers filters by country/city and sorts by latency', () => 
 
 test('encodeAccountBinPayload and decodeAccountBinPayload round-trip data/account.bin binary store', async () => {
   const { encodeAccountBinPayload, decodeAccountBinPayload, ACCOUNT_BIN_MAGIC, APP_VERSION, compareSemver } = await import('./vpnLogic.ts');
-  assert.equal(APP_VERSION, '1.0.7');
-  assert.equal(compareSemver('1.0.8', '1.0.7'), 1);
-  assert.equal(compareSemver('v1.0.7', '1.0.7'), 0);
+  assert.equal(APP_VERSION, '1.1.0');
+  assert.equal(compareSemver('1.1.1', '1.1.0'), 1);
+  assert.equal(compareSemver('v1.1.0', '1.1.0'), 0);
 
   const snapshot = {
     version: APP_VERSION,
@@ -150,7 +150,7 @@ test('encodeAccountBinPayload and decodeAccountBinPayload round-trip data/accoun
   assert.equal(binary.length > 8, true);
   const decoded = decodeAccountBinPayload(binary);
   assert.ok(decoded);
-  assert.equal(decoded.version, '1.0.7');
+  assert.equal(decoded.version, '1.1.0');
   assert.equal(decoded.user?.email, 'persistent@firefox.com');
   assert.equal(decoded.pool.length, 1);
 });
@@ -245,4 +245,27 @@ test('extractAuthErrorMessage unwraps Wails plain string errors, detects 6-digit
   const fastlyErr = extractAuthErrorMessage('Fastly anti-bot challenge persisted after 6 attempts (HTTP 406)', 'fa');
   assert.equal(fastlyErr.requiresOtp, false);
   assert.ok(fastlyErr.message.includes('HTTP 406'));
+
+  // 4. Mozilla HTTP 451 regional block error
+  const region451Err = extractAuthErrorMessage('fpn/token returned HTTP 451: {"error":"unavailable_in_region"}', 'fa');
+  assert.equal(region451Err.requiresOtp, false);
+  assert.ok(region451Err.message.includes('HTTP 451'));
+  assert.ok(region451Err.message.includes('رله موزیلا'));
+});
+
+test('parseRelayUrl parses origins, query secrets, and validates formats', async () => {
+  const { parseRelayUrl } = await import('./vpnLogic.ts');
+
+  const empty = parseRelayUrl('');
+  assert.equal(empty.isValid, false);
+
+  const cfWorker = parseRelayUrl('https://my-relay.workers.dev/?secret=foxy_secret_123');
+  assert.equal(cfWorker.isValid, true);
+  assert.equal(cfWorker.url, 'https://my-relay.workers.dev/');
+  assert.equal(cfWorker.secret, 'foxy_secret_123');
+
+  const customDomainRelay = parseRelayUrl('https://relay.mydomain.com/?secret=my_secret_token');
+  assert.equal(customDomainRelay.isValid, true);
+  assert.equal(customDomainRelay.url, 'https://relay.mydomain.com/');
+  assert.equal(customDomainRelay.secret, 'my_secret_token');
 });

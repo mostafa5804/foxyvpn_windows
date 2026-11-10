@@ -13,6 +13,7 @@
 
   <p>
     <a href="#-نسخه-فارسی-persian">🇮🇷 توضیحات فارسی</a> •
+    <a href="docs/RELAY_GUIDE.md">🦊 راهنمای رله موزیلا (HTTP 451)</a> •
     <a href="#-english-documentation">🇬🇧 English Documentation</a> •
     <a href="#-downloads--packages">📦 Downloads</a> •
     <a href="#-building-from-source">🛠️ Build from Source</a>
@@ -63,7 +64,13 @@
 - **مسدودسازی نشت IPv6 (IPv6 Leak Protection):** جلوگیری از نشت ترافیک روی شبکه IPv6 در زمان اتصال.
 - **تنظیم MTU سفارشی:** امکان بهینه‌سازی سایز بسته‌های شبکه (`1280` تا `1500` بایت) برای اینترنت‌های همراه و ثابت.
 
-#### ۵. امنیت داده و ذخیره‌سازی باینری رمزنگاری‌شده
+#### ۵. سیستم رله موزیلا (رفع تحریم منطقه‌ای HTTP 451)
+- **دور زدن خودکار خطای `unavailable_in_region`:** موزیلا درخواست‌های صدور مجوز (`/api/v1/fpn/token`) را برای آی‌پی‌های ایران مسدود کرده است. برنامه به‌صورت کاملاً هوشمند از شبکه رله‌های ابری اشتراکی برای دریافت توکن استفاده می‌کند.
+- **ترافیک سریع و مستقیم تونل:** رله تنها مجوز اتصال را دریافت می‌کند و ترافیک اصلی دانلود و وبگردی مستقیماً از تونل گیگابیتی Fastly عبور می‌کند.
+- **پشتیبانی از رله شخصی:** امکان استقرار ۱ کلیک و خودکار در ورکر کلادفلر (Cloudflare Worker).
+- **راهنمای استقرار کامل:** مطالعه مستندات جامع در [docs/RELAY_GUIDE.md](docs/RELAY_GUIDE.md).
+
+#### ۶. امنیت داده و ذخیره‌سازی باینری رمزنگاری‌شده
 - **ذخیره‌سازی امن در `data/account.bin`:** هیچ توکن یا اطلاعات حسابی در فایل‌های متنی ساده (Plaintext) یا `localStorage` ذخیره نمی‌شود.
 - **رمزنگاری دو مرحله‌ای (Windows DPAPI + AES-256-GCM):** اطلاعات حساب‌ها و مصرف ترافیک با کلیدهای مشتق‌شده از شناسه ماشین و CryptProtectData ویندوز رمزنگاری می‌شوند.
 - **بررسی آنلاین نسخه جدید:** امکان بررسی آخرین نسخه منتشرشده مستقیماً از مخزن رسمی گیت‌هاب در بخش «درباره برنامه».
@@ -106,7 +113,12 @@
 - **Windows Firewall Kill Switch:** Blocks non-tunnel outbound traffic if the VPN drops unexpectedly, restoring normal rules on intentional disconnect.
 - **IPv6 Leak Protection & Custom MTU:** Prevents IPv6 traffic leaks and allows fine-tuning adapter MTU (`1280`–`1500`).
 
-#### 5. Cryptographic Storage & Verifiable Security
+#### 5. Mozilla Guardian Relay (Bypassing HTTP 451 Regional Block)
+- **Automatic Regional Block Bypass:** Mozilla recently restricts Iranian IP addresses with `HTTP 451: unavailable_in_region` on its control plane (`/api/v1/fpn/token`). FoxyVPN v1.1.0 transparently utilizes built-in shared cloud relays to obtain authorization tokens.
+- **Direct High-Speed Tunneling:** Relay only processes the lightweight token request; all primary browsing, streaming, and gaming traffic flows directly through Fastly MASQUE without speed penalties.
+- **Custom Relay Deployment:** Supports 1-click Cloudflare Worker automated deployment. See the complete guide at [docs/RELAY_GUIDE.md](docs/RELAY_GUIDE.md).
+
+#### 6. Cryptographic Storage & Verifiable Security
 - **Encrypted Binary Vault (`data/account.bin`):** Account tokens, OAuth credentials, and quota states are encrypted on disk using **Windows DPAPI (`CryptProtectData`) + AES-256-GCM**.
 - **Pinned Wintun Binary Verification:** Automatically verifies the official `wintun.dll` v0.14.1 against its pinned SHA-256 hash (`07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51`).
 

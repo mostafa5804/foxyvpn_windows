@@ -34,3 +34,12 @@ func EngageKillSwitch(edgeIP string) error {
 func DisengageKillSwitch() error {
 	return nil
 }
+
+func allowFirewallInboundPorts(ruleName, ports string) error {
+	return nil
+}
+
+func removeFirewallRule(ruleName string) error {
+	return nil
+}
+

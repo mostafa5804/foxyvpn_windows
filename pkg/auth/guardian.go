@@ -285,6 +285,13 @@ type GuardianService struct {
 	poolIndex        int
 	pinnedFirefoxIP  string
 	logFunc          func(level, msg string)
+
+	// Mozilla Guardian Relay config (HTTP 451: unavailable_in_region bypass)
+	relayMu         sync.RWMutex
+	relayEnabled    bool
+	customRelayURL  string
+	useSharedRelays bool
+	sharedRelays    []string
 }
 
 type pendingVerification struct {
@@ -364,6 +371,13 @@ func NewGuardianService(logFn func(level, msg string)) *GuardianService {
 		cookieJar:       jar,
 		guardianBaseURL: GuardianEndpointDefault,
 		logFunc:         logFn,
+		relayEnabled:    true,
+		useSharedRelays: true,
+		sharedRelays: []string{
+			"https://cf-guardian-relay.pages.dev",
+			"https://guardian-relay.foxyvpn.org",
+			"https://relay.foxyvpn.workers.dev",
+		},
 	}
 	svc.httpClient = &http.Client{
 		Timeout:   controlPlaneHTTPTimeout,
@@ -446,6 +460,260 @@ func (g *GuardianService) SetControlPlaneProxy(rawProxyURL string) error {
 	g.httpClient.Transport = transport
 	g.log("INFO", "Control-plane API routed via %s", parsed.Host)
 	return nil
+}
+
+// SetRelayConfig updates custom relay URL, shared relays fallback, and activation status.
+func (g *GuardianService) SetRelayConfig(enabled bool, customURL string, useShared bool) {
+	g.relayMu.Lock()
+	defer g.relayMu.Unlock()
+	g.relayEnabled = enabled
+	g.customRelayURL = strings.TrimSpace(customURL)
+	g.useSharedRelays = useShared
+	g.log("INFO", "Updated Relay settings: Enabled=%v, CustomRelay=%s, UseShared=%v", enabled, sanitizeRelayDisplay(g.customRelayURL), useShared)
+}
+
+// GetRelayConfig returns the current relay configuration.
+func (g *GuardianService) GetRelayConfig() (bool, string, bool) {
+	g.relayMu.RLock()
+	defer g.relayMu.RUnlock()
+	return g.relayEnabled, g.customRelayURL, g.useSharedRelays
+}
+
+// sanitizeRelayDisplay removes secret keys from relay URL strings before logging or displaying.
+func sanitizeRelayDisplay(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if u, err := url.Parse(raw); err == nil && u.Host != "" {
+		return u.Scheme + "://" + u.Host + u.Path
+	}
+	if idx := strings.Index(raw, "?"); idx != -1 {
+		return raw[:idx]
+	}
+	return raw
+}
+
+// callSingleRelay dispatches an HTTP request to an upstream relay (Cloudflare Worker or PHP script).
+func (g *GuardianService) callSingleRelay(ctx context.Context, relayRawURL, method, subPath string, body []byte, accessToken string) (*http.Response, []byte, error) {
+	relayRawURL = strings.TrimSpace(relayRawURL)
+	if relayRawURL == "" {
+		return nil, nil, errors.New("empty relay URL")
+	}
+	if !strings.Contains(relayRawURL, "://") {
+		relayRawURL = "https://" + relayRawURL
+	}
+	u, err := url.Parse(relayRawURL)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid relay URL: %w", err)
+	}
+
+	secretKey := u.Query().Get("secret")
+	q := u.Query()
+
+	var targetURL string
+	if strings.HasSuffix(strings.ToLower(u.Path), ".php") || strings.Contains(u.Path, ".") {
+		q.Set("path", subPath)
+		u.RawQuery = q.Encode()
+		targetURL = u.String()
+	} else {
+		// Worker or endpoint URL: append subPath if not already present
+		basePath := strings.TrimRight(u.Path, "/")
+		if !strings.HasSuffix(basePath, subPath) {
+			u.Path = basePath + subPath
+		}
+		targetURL = u.String()
+	}
+
+	var bodyReader io.Reader
+	if len(body) > 0 {
+		bodyReader = bytes.NewReader(body)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, targetURL, bodyReader)
+	if err != nil {
+		return nil, nil, err
+	}
+	applyGuardianHeaders(req)
+	if method == http.MethodPost {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if accessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+	}
+	if secretKey != "" {
+		req.Header.Set("X-Relay-Secret", secretKey)
+	}
+
+	client := &http.Client{
+		Timeout: controlPlaneHTTPTimeout,
+	}
+	if g.httpClient != nil && g.httpClient.Transport != nil {
+		client.Transport = g.httpClient.Transport
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil {
+		return nil, nil, err
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(data))
+	return resp, data, nil
+}
+
+// executeGuardianCall executes a Guardian request (status, activate, token) directly first.
+// If direct call encounters HTTP 451 (unavailable_in_region) or connection issues,
+// and relay is enabled, it automatically retries via CustomRelayURL and shared relays.
+func (g *GuardianService) executeGuardianCall(ctx context.Context, method, subPath string, body []byte, accessToken string) (*http.Response, []byte, error) {
+	reqURL := strings.TrimRight(g.guardianBaseURL, "/") + subPath
+	var directResp *http.Response
+	var directData []byte
+	var directErr error
+
+	directResp, directErr = g.doWithChallenge(ctx, func() (*http.Request, error) {
+		var r io.Reader
+		if len(body) > 0 {
+			r = bytes.NewReader(body)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, reqURL, r)
+		if err != nil {
+			return nil, err
+		}
+		applyGuardianHeaders(req)
+		if method == http.MethodPost {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		if accessToken != "" {
+			req.Header.Set("Authorization", "Bearer "+accessToken)
+		}
+		return req, nil
+	})
+
+	if directErr == nil {
+		directData, _ = io.ReadAll(io.LimitReader(directResp.Body, 32*1024))
+		_ = directResp.Body.Close()
+
+		isRegionBlocked := directResp.StatusCode == 451 ||
+			bytes.Contains(directData, []byte("unavailable_in_region")) ||
+			bytes.Contains(directData, []byte("451 Unavailable For Legal Reasons"))
+
+		if !isRegionBlocked {
+			directResp.Body = io.NopCloser(bytes.NewReader(directData))
+			return directResp, directData, nil
+		}
+
+		g.log("WARN", "Mozilla Guardian direct access blocked by region (HTTP 451: unavailable_in_region). Initiating relay bypass...")
+	} else {
+		g.log("WARN", "Mozilla Guardian direct call failed: %v. Checking relay fallback...", directErr)
+	}
+
+	g.relayMu.RLock()
+	enabled := g.relayEnabled
+	customRelay := g.customRelayURL
+	useShared := g.useSharedRelays
+	sharedList := append([]string(nil), g.sharedRelays...)
+	g.relayMu.RUnlock()
+
+	if !enabled && !useShared {
+		if directResp != nil {
+			directResp.Body = io.NopCloser(bytes.NewReader(directData))
+			return directResp, directData, nil
+		}
+		return nil, nil, directErr
+	}
+
+	candidates := make([]string, 0, 1+len(sharedList))
+	if customRelay != "" {
+		candidates = append(candidates, customRelay)
+	}
+	if useShared {
+		for _, s := range sharedList {
+			if s != "" && s != customRelay {
+				candidates = append(candidates, s)
+			}
+		}
+	}
+
+	var lastRelayErr error
+	for _, candidate := range candidates {
+		relayResp, relayData, err := g.callSingleRelay(ctx, candidate, method, subPath, body, accessToken)
+		if err == nil && relayResp != nil && relayResp.StatusCode >= 200 && relayResp.StatusCode < 400 {
+			g.log("INFO", "Successfully bypassed HTTP 451 region block using Guardian relay (%s)", sanitizeRelayDisplay(candidate))
+			relayResp.Body = io.NopCloser(bytes.NewReader(relayData))
+			return relayResp, relayData, nil
+		}
+		if err != nil {
+			lastRelayErr = err
+			g.log("WARN", "Relay %s error: %v", sanitizeRelayDisplay(candidate), err)
+		} else if relayResp != nil {
+			lastRelayErr = fmt.Errorf("relay returned HTTP %d: %s", relayResp.StatusCode, string(relayData))
+		}
+	}
+
+	if directResp != nil {
+		directResp.Body = io.NopCloser(bytes.NewReader(directData))
+		return directResp, directData, nil
+	}
+	if lastRelayErr != nil {
+		return nil, nil, fmt.Errorf("all relays and direct connection failed: %w", lastRelayErr)
+	}
+	return nil, nil, directErr
+}
+
+// TestRelayEndpoint tests connection and latency to a given relay URL.
+func (g *GuardianService) TestRelayEndpoint(ctx context.Context, relayURL string) (bool, string, error) {
+	relayURL = strings.TrimSpace(relayURL)
+	if relayURL == "" {
+		return false, "", errors.New("آدرس رله خالی است")
+	}
+	if !strings.Contains(relayURL, "://") {
+		relayURL = "https://" + relayURL
+	}
+	u, err := url.Parse(relayURL)
+	if err != nil {
+		return false, "", fmt.Errorf("آدرس رله نامعتبر است: %w", err)
+	}
+
+	testURL := u.String()
+	if !strings.Contains(u.Path, ".php") && (u.Path == "" || u.Path == "/") {
+		u.Path = "/health"
+		testURL = u.String()
+	}
+
+	start := time.Now()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, testURL, nil)
+	if err != nil {
+		return false, "", err
+	}
+	applyGuardianHeaders(req)
+	if secret := u.Query().Get("secret"); secret != "" {
+		req.Header.Set("X-Relay-Secret", secret)
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	if g.httpClient != nil && g.httpClient.Transport != nil {
+		client.Transport = g.httpClient.Transport
+	}
+
+	resp, err := client.Do(req)
+	latency := time.Since(start).Milliseconds()
+	if err != nil {
+		return false, fmt.Sprintf("%dms", latency), fmt.Errorf("خطای ارتباط با سرور رله: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent {
+		return true, fmt.Sprintf("%dms", latency), nil
+	}
+	if resp.StatusCode == http.StatusForbidden {
+		return false, fmt.Sprintf("%dms", latency), errors.New("کلید رمز رله (Secret) نامعتبر یا ثبت‌نشده است (HTTP 403)")
+	}
+	return false, fmt.Sprintf("%dms", latency), fmt.Errorf("سرور رله کد %d بازگرداند", resp.StatusCode)
 }
 
 // deriveAuthPW performs FxA quickStretch (PBKDF2-HMAC-SHA256) + HKDF-SHA256.
@@ -1571,22 +1839,12 @@ func (g *GuardianService) EnsureGuardianEntitlement(ctx context.Context, accessT
 
 // FetchUserInfo queries GET https://vpn.mozilla.org/api/v1/fpn/status.
 func (g *GuardianService) FetchUserInfo(ctx context.Context, accessToken string) (*Entitlement, error) {
-	statusURL := strings.TrimRight(g.guardianBaseURL, "/") + "/api/v1/fpn/status"
-	resp, err := g.doWithChallenge(ctx, func() (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, statusURL, nil)
-		if err != nil {
-			return nil, err
-		}
-		applyGuardianHeaders(req)
-		req.Header.Set("Authorization", "Bearer "+accessToken)
-		return req, nil
-	})
+	resp, data, err := g.executeGuardianCall(ctx, http.MethodGet, "/api/v1/fpn/status", nil, accessToken)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("fpn/status returned HTTP %d: %s", resp.StatusCode, string(data))
 	}
@@ -1613,23 +1871,12 @@ func (g *GuardianService) FetchUserInfo(ctx context.Context, accessToken string)
 
 // ActivateGuardian calls POST https://vpn.mozilla.org/api/v1/fpn/activate to enable the free 50 GB tier.
 func (g *GuardianService) ActivateGuardian(ctx context.Context, accessToken string) (*Entitlement, error) {
-	activateURL := strings.TrimRight(g.guardianBaseURL, "/") + "/api/v1/fpn/activate"
-	resp, err := g.doWithChallenge(ctx, func() (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, activateURL, bytes.NewReader(nil))
-		if err != nil {
-			return nil, err
-		}
-		applyGuardianHeaders(req)
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+accessToken)
-		return req, nil
-	})
+	resp, data, err := g.executeGuardianCall(ctx, http.MethodPost, "/api/v1/fpn/activate", nil, accessToken)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("fpn/activate returned HTTP %d: %s", resp.StatusCode, string(data))
 	}
@@ -1658,16 +1905,7 @@ func (g *GuardianService) ActivateGuardian(ctx context.Context, accessToken stri
 
 // FetchProxyPass calls GET https://vpn.mozilla.org/api/v1/fpn/token and reads quota headers, body fields, and JWT claims.
 func (g *GuardianService) FetchProxyPass(ctx context.Context, accessToken string) (*ProxyPassInfo, error) {
-	tokenURL := strings.TrimRight(g.guardianBaseURL, "/") + "/api/v1/fpn/token"
-	resp, err := g.doWithChallenge(ctx, func() (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, tokenURL, nil)
-		if err != nil {
-			return nil, err
-		}
-		applyGuardianHeaders(req)
-		req.Header.Set("Authorization", "Bearer "+accessToken)
-		return req, nil
-	})
+	resp, data, err := g.executeGuardianCall(ctx, http.MethodGet, "/api/v1/fpn/token", nil, accessToken)
 	if err != nil {
 		return nil, err
 	}
@@ -1680,7 +1918,6 @@ func (g *GuardianService) FetchProxyPass(ctx context.Context, accessToken string
 		return nil, ErrQuotaExceeded
 	}
 
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("fpn/token returned HTTP %d: %s", resp.StatusCode, string(data))
 	}

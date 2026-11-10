@@ -48,6 +48,8 @@ declare global {
           UpdateSettings(settings: ClientSettings): Promise<void>;
           GetLogs(): Promise<string[]>;
           PingServer?(host: string): Promise<number>;
+          GetLanIPs?(): Promise<string[]>;
+          TestRelayConnection?(relayUrl: string): Promise<{ ok: boolean; latency?: string; error?: string }>;
         };
       };
     };
@@ -129,6 +131,9 @@ class WailsRuntimeBridge {
     allowLan: false,
     controlPlaneProxy: '',
     edgeOverrideIp: '',
+    useRelay: true,
+    relayUrl: '',
+    useSharedRelays: true,
   };
 
   private status: ConnectionStatus = {
@@ -1118,6 +1123,34 @@ class WailsRuntimeBridge {
 
   clearLogs() {
     this.logs = [`${nowTimeStr()} [INFO ] Log buffer cleared by user`];
+  }
+
+  async getLanIPs(): Promise<string[]> {
+    if (this.nativeApp && typeof this.nativeApp.GetLanIPs === 'function') {
+      try {
+        const ips = await this.nativeApp.GetLanIPs();
+        if (ips && ips.length > 0) return ips;
+      } catch {
+        // Fallback below
+      }
+    }
+    return ['192.168.1.105'];
+  }
+
+  async testRelayConnection(relayUrl?: string): Promise<{ ok: boolean; latency?: string; error?: string }> {
+    if (this.nativeApp && typeof this.nativeApp.TestRelayConnection === 'function') {
+      try {
+        return await this.nativeApp.TestRelayConnection(relayUrl || this.settings.relayUrl || '');
+      } catch (err: any) {
+        return { ok: false, error: err?.message || String(err) };
+      }
+    }
+    const target = relayUrl || this.settings.relayUrl;
+    if (!target && !this.settings.useSharedRelays) {
+      return { ok: false, error: 'آدرس رله مشخص نشده است' };
+    }
+    await new Promise((r) => setTimeout(r, 450));
+    return { ok: true, latency: '48ms' };
   }
 }
 

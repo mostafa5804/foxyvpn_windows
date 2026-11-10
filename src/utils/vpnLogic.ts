@@ -56,6 +56,9 @@ export interface ClientSettings {
   allowLan?: boolean;
   controlPlaneProxy: string;
   edgeOverrideIp: string;
+  useRelay?: boolean;
+  relayUrl?: string;
+  useSharedRelays?: boolean;
 }
 
 export interface UpdateCheckResult {
@@ -348,7 +351,7 @@ export function countryCodeToFlag(countryCode: string): string {
 
 export const ACCOUNT_BIN_PATH = 'data/account.bin';
 export const ACCOUNT_BIN_MAGIC = 'FOXYBIN1';
-export const APP_VERSION = '1.0.7';
+export const APP_VERSION = '1.1.0';
 
 export function compareSemver(a: string, b: string): number {
   const pa = a.replace(/^v/i, '').trim().split('.').map((n) => parseInt(n, 10) || 0);
@@ -536,6 +539,16 @@ export function extractAuthErrorMessage(
     };
   }
 
+  if (lower.includes('451') || lower.includes('unavailable_in_region')) {
+    return {
+      requiresOtp: false,
+      message:
+        lang === 'fa'
+          ? 'خطای تحریم منطقه‌ای موزیلا (HTTP 451): سرویس Guardian دسترسی مستقیم از ایران را مسدود کرده است. قابلیت «رله موزیلا» در تب تنظیمات فعال شد تا مجوز اتصال به‌صورت خودکار دریافت شود.'
+          : 'Mozilla region block (HTTP 451: unavailable_in_region): Guardian blocked direct access. Please enable Mozilla Relay in Settings to automatically bypass this restriction.',
+    };
+  }
+
   if (lower.includes('http 406') || lower.includes('fastly anti-bot')) {
     return {
       requiresOtp: false,
@@ -554,4 +567,23 @@ export function extractAuthErrorMessage(
     requiresOtp: false,
     message: lang === 'fa' ? 'خطا در احراز هویت اکانت فایرفاکس' : 'Authentication failed',
   };
+}
+
+export function parseRelayUrl(input: string): { url: string; secret: string; isValid: boolean } {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return { url: '', secret: '', isValid: false };
+  }
+  try {
+    const raw = trimmed.startsWith('http://') || trimmed.startsWith('https://') ? trimmed : `https://${trimmed}`;
+    const parsed = new URL(raw);
+    const secret = parsed.searchParams.get('secret') || '';
+    return {
+      url: parsed.origin + parsed.pathname,
+      secret,
+      isValid: parsed.protocol === 'http:' || parsed.protocol === 'https:',
+    };
+  } catch {
+    return { url: trimmed, secret: '', isValid: false };
+  }
 }

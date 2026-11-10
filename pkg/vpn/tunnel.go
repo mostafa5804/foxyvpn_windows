@@ -12,6 +12,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -226,11 +228,30 @@ func (e *Engine) Start(ctx context.Context, cfg TunnelConfig) error {
 	e.cfg = cfg
 	e.mu.Unlock()
 
-	// Enable Windows System Proxy (WinINET -> actualHttpAddr) after saving prior user proxy settings
-	if proxyErr := SetWindowsSystemProxy(actualHttpAddr); proxyErr != nil {
+	// Enable Windows System Proxy (WinINET -> 127.0.0.1:<port> even if listening on 0.0.0.0 for LAN sharing)
+	winInetAddr := actualHttpAddr
+	if host, port, err := net.SplitHostPort(actualHttpAddr); err == nil && (host == "0.0.0.0" || host == "") {
+		winInetAddr = net.JoinHostPort("127.0.0.1", port)
+	}
+	if proxyErr := SetWindowsSystemProxy(winInetAddr); proxyErr != nil {
 		e.log("WARN", "Setting Windows WinINET proxy warning: %v", proxyErr)
 	} else {
-		e.log("INFO", "Enabled Windows System Proxy -> %s (SOCKS5 on %s)", actualHttpAddr, actualSocksAddr)
+		e.log("INFO", "Enabled Windows System Proxy -> %s (SOCKS5 on %s)", winInetAddr, actualSocksAddr)
+	}
+
+	// If LAN sharing is active (listening on 0.0.0.0), configure Windows Firewall rule so other devices on Wi-Fi/LAN can reach proxy ports
+	if strings.HasPrefix(actualHttpAddr, "0.0.0.0:") || strings.HasPrefix(actualSocksAddr, "0.0.0.0:") {
+		_, httpPortStr, _ := net.SplitHostPort(actualHttpAddr)
+		_, socksPortStr, _ := net.SplitHostPort(actualSocksAddr)
+		ports := httpPortStr
+		if socksPortStr != "" && socksPortStr != httpPortStr {
+			ports += "," + socksPortStr
+		}
+		if err := allowFirewallInboundPorts("FoxyVPN LAN Proxy", ports); err != nil {
+			e.log("WARN", "Windows Firewall LAN rule notice: %v", err)
+		} else {
+			e.log("INFO", "Windows Firewall allowed inbound TCP on ports %s for LAN sharing", ports)
+		}
 	}
 
 	if strings.EqualFold(cfg.Mode, "tun") {
@@ -301,6 +322,7 @@ func (e *Engine) Stop() error {
 	wasRunning := e.running.Swap(false)
 	_ = DisengageKillSwitch()
 	_ = ClearWindowsSystemProxy()
+	_ = removeFirewallRule("FoxyVPN LAN Proxy")
 
 	if !wasRunning && e.wintunAdapter == nil && e.socksListener == nil && e.httpListener == nil && e.session == nil {
 		return nil
