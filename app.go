@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -222,6 +223,87 @@ func (a *App) startup(ctx context.Context) {
 		}
 		a.mu.Unlock()
 	}
+
+	go a.loadDynamicSharedRelays()
+}
+
+func (a *App) loadDynamicSharedRelays() {
+	var relayURLs []string
+	// 1. Read local relays.json
+	if data, err := os.ReadFile("relays.json"); err == nil {
+		var doc struct {
+			Relays []struct {
+				URL     string `json:"url"`
+				Enabled bool   `json:"enabled"`
+			} `json:"relays"`
+		}
+		if json.Unmarshal(data, &doc) == nil {
+			for _, r := range doc.Relays {
+				if r.Enabled && strings.TrimSpace(r.URL) != "" {
+					relayURLs = append(relayURLs, strings.TrimSpace(r.URL))
+				}
+			}
+		}
+	}
+
+	// Always ensure hardcoded fallback relays if relays.json is missing or empty
+	if len(relayURLs) == 0 {
+		relayURLs = []string{
+			"https://super-sound-e970.silver-route-01.workers.dev/?secret=arman",
+			"https://autumn-sun-0631.salar982020.workers.dev/?secret=arman",
+		}
+	}
+
+	a.authSvc.SetSharedRelays(relayURLs)
+
+	// 2. Asynchronously fetch latest community relays from online manifests
+	go func() {
+		manifestURLs := []string{
+			"https://raw.githubusercontent.com/arman-org/update-manifests/main/arman-vpn-client/updates.json",
+			"https://cdn.jsdelivr.net/gh/arman-org/update-manifests@main/arman-vpn-client/updates.json",
+		}
+		client := &http.Client{Timeout: 6 * time.Second}
+		for _, mURL := range manifestURLs {
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, mURL, nil)
+			if err != nil {
+				continue
+			}
+			req.Header.Set("Accept", "application/json")
+			resp, err := client.Do(req)
+			if err != nil {
+				continue
+			}
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+			_ = resp.Body.Close()
+
+			var doc struct {
+				Relays *struct {
+					Enabled bool     `json:"enabled"`
+					URLs    []string `json:"urls"`
+				} `json:"relays"`
+			}
+			if json.Unmarshal(body, &doc) == nil && doc.Relays != nil && doc.Relays.Enabled && len(doc.Relays.URLs) > 0 {
+				seen := make(map[string]bool)
+				var merged []string
+				for _, u := range doc.Relays.URLs {
+					u = strings.TrimSpace(u)
+					if u != "" && !seen[u] {
+						seen[u] = true
+						merged = append(merged, u)
+					}
+				}
+				for _, u := range relayURLs {
+					if !seen[u] {
+						seen[u] = true
+						merged = append(merged, u)
+					}
+				}
+				a.authSvc.SetSharedRelays(merged)
+				a.appendLog("INFO", fmt.Sprintf("Updated shared relay pool from live manifest (%d endpoints)", len(merged)))
+				break
+			}
+		}
+	}()
 }
 
 // GetSavedUser returns the authenticated user restored from data/account.bin on startup.

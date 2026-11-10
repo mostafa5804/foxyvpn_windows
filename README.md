@@ -67,7 +67,7 @@
 #### ۵. سیستم رله موزیلا (رفع تحریم منطقه‌ای HTTP 451)
 - **دور زدن خودکار خطای `unavailable_in_region`:** موزیلا درخواست‌های صدور مجوز (`/api/v1/fpn/token`) را برای آی‌پی‌های ایران مسدود کرده است. برنامه به‌صورت کاملاً هوشمند از شبکه رله‌های ابری اشتراکی برای دریافت توکن استفاده می‌کند.
 - **ترافیک سریع و مستقیم تونل:** رله تنها مجوز اتصال را دریافت می‌کند و ترافیک اصلی دانلود و وبگردی مستقیماً از تونل گیگابیتی Fastly عبور می‌کند.
-- **پشتیبانی از رله شخصی:** امکان استقرار ۱ کلیک و خودکار در ورکر کلادفلر (Cloudflare Worker).
+- **پشتیبانی از رله شخصی:** راه‌اندازی سریع در پنل رایگان کلادفلر (بدون نیاز به گیت‌هاب و بدون نیاز به هاست/سرور).
 - **راهنمای استقرار کامل:** مطالعه مستندات جامع در [docs/RELAY_GUIDE.md](docs/RELAY_GUIDE.md).
 
 #### ۶. امنیت داده و ذخیره‌سازی باینری رمزنگاری‌شده
@@ -116,7 +116,7 @@
 #### 5. Mozilla Guardian Relay (Bypassing HTTP 451 Regional Block)
 - **Automatic Regional Block Bypass:** Mozilla recently restricts Iranian IP addresses with `HTTP 451: unavailable_in_region` on its control plane (`/api/v1/fpn/token`). FoxyVPN v1.1.0 transparently utilizes built-in shared cloud relays to obtain authorization tokens.
 - **Direct High-Speed Tunneling:** Relay only processes the lightweight token request; all primary browsing, streaming, and gaming traffic flows directly through Fastly MASQUE without speed penalties.
-- **Custom Relay Deployment:** Supports 1-click Cloudflare Worker automated deployment. See the complete guide at [docs/RELAY_GUIDE.md](docs/RELAY_GUIDE.md).
+- **Custom Relay Deployment:** Step-by-step setup on Cloudflare Workers dashboard without requiring GitHub account connection. See the complete guide at [docs/RELAY_GUIDE.md](docs/RELAY_GUIDE.md).
 
 #### 6. Cryptographic Storage & Verifiable Security
 - **Encrypted Binary Vault (`data/account.bin`):** Account tokens, OAuth credentials, and quota states are encrypted on disk using **Windows DPAPI (`CryptProtectData`) + AES-256-GCM**.

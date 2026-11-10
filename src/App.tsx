@@ -47,6 +47,8 @@ import {
 import { DEFAULT_SERVERS, vpnBridge, openExternalUrl, type PoolAccountItem } from './utils/wailsBridge';
 import { translations, type Language } from './utils/i18n';
 import { ServerSelectorModal } from './components/ServerSelectorModal';
+import { RelayGuideModal } from './components/RelayGuideModal';
+import { CLOUDFLARE_WORKER_CODE } from './utils/cloudflareWorkerCode';
 import { FoxyLogo } from './components/FoxyLogo';
 import { CountryFlag } from './components/CountryFlag';
 
@@ -107,6 +109,7 @@ export default function App() {
   });
 
   const [showServerModal, setShowServerModal] = useState(false);
+  const [showRelayGuideModal, setShowRelayGuideModal] = useState(false);
 
   // Settings state
   const [settings, setSettings] = useState<ClientSettings>({
@@ -377,8 +380,8 @@ export default function App() {
         setStatus(s);
         syncConnectedServer(s);
       } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        setConnectionError(msg);
+        const errInfo = extractAuthErrorMessage(err, lang);
+        setConnectionError(errInfo.message);
         const s = await vpnBridge.getStatus();
         setStatus({ ...s, state: 'Disconnected' });
       }
@@ -1041,20 +1044,48 @@ export default function App() {
 
               {connectionError && (
                 <div
-                  className={`p-2.5 rounded-[10px] border text-[11.5px] flex items-start justify-between gap-2 ${
+                  className={`p-3 rounded-[12px] border text-[11.5px] flex flex-col gap-2 ${
                     isDark
-                      ? 'bg-red-950/40 border-red-800/60 text-red-300'
-                      : 'bg-red-50 border-red-200 text-red-700'
+                      ? 'bg-red-950/40 border-red-800/60 text-red-200'
+                      : 'bg-red-50 border-red-200 text-red-800'
                   }`}
                 >
-                  <span className="leading-snug">{connectionError}</span>
-                  <button
-                    type="button"
-                    onClick={() => setConnectionError(null)}
-                    className="text-[11px] font-bold opacity-75 hover:opacity-100 cursor-pointer bg-transparent border-0 text-current shrink-0"
-                  >
-                    ✕
-                  </button>
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="leading-snug font-medium">{connectionError}</span>
+                    <button
+                      type="button"
+                      onClick={() => setConnectionError(null)}
+                      className="text-[11px] font-bold opacity-75 hover:opacity-100 cursor-pointer bg-transparent border-0 text-current shrink-0"
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  {(connectionError.includes('451') ||
+                    connectionError.includes('تحریم') ||
+                    connectionError.includes('unavailable_in_region') ||
+                    connectionError.includes('Guardian ProxyPass')) && (
+                    <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-red-800/30">
+                      <button
+                        type="button"
+                        onClick={() => setShowRelayGuideModal(true)}
+                        className="h-[28px] px-2.5 rounded-[7px] bg-[#FF7A1A] text-[#1A0F05] font-bold text-[11px] flex items-center gap-1 cursor-pointer border-0 shadow-xs hover:bg-[#FF8D36]"
+                      >
+                        <Zap className="w-3 h-3" />
+                        <span>{lang === 'fa' ? 'آموزش ساخت ورکر (بدون گیت‌هاب)' : 'Worker Setup Guide'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setConnectionError(null);
+                          setActiveTab('settings');
+                        }}
+                        className="h-[28px] px-2.5 rounded-[7px] bg-white/10 hover:bg-white/20 text-white font-semibold text-[11px] flex items-center gap-1 cursor-pointer border border-white/20"
+                      >
+                        <span>{lang === 'fa' ? 'رفتن به تنظیمات رله' : 'Relay Settings'}</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -2573,15 +2604,20 @@ export default function App() {
 
                   <button
                     type="button"
-                    onClick={() =>
-                      openExternalUrl(
-                        'https://deploy.workers.cloudflare.com/?url=https://github.com/mostafa5804/foxyvpn_windows'
-                      )
-                    }
+                    onClick={() => setShowRelayGuideModal(true)}
                     className="h-[32px] px-3 rounded-[8px] bg-[#FF7A1A]/15 text-[#FF7A1A] font-bold text-[11.5px] flex items-center gap-1.5 cursor-pointer border-0 hover:bg-[#FF7A1A]/25"
                   >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                    <span>{lang === 'fa' ? 'ساخت سریع ورکر با ۱ کلیک' : '1-Click Cloudflare Deploy'}</span>
+                    <Zap className="w-3.5 h-3.5" />
+                    <span>{lang === 'fa' ? 'راهنمای ساخت ورکر (بدون گیت‌هاب)' : 'Worker Guide (No GitHub)'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleCopyText(CLOUDFLARE_WORKER_CODE, 'worker-code')}
+                    className="h-[32px] px-3 rounded-[8px] bg-[#1F2733] text-[#E8ECF1] font-semibold text-[11px] flex items-center gap-1.5 cursor-pointer border border-[#2A323D] hover:border-[#FF7A1A]/50"
+                  >
+                    {copiedItem === 'worker-code' ? <Check className="w-3.5 h-3.5 text-[#2DD4A0]" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedItem === 'worker-code' ? (lang === 'fa' ? 'کد ورکر کپی شد!' : 'Code Copied!') : (lang === 'fa' ? 'کپی کد worker.js' : 'Copy worker.js')}</span>
                   </button>
 
                   <button
@@ -2995,6 +3031,16 @@ export default function App() {
             isDark={isDark}
             lang={lang}
             onRefreshServers={(updated) => setServers(updated)}
+          />
+        )}
+
+        {/* Cloudflare Worker Relay Setup Modal (Zero-GitHub) */}
+        {showRelayGuideModal && (
+          <RelayGuideModal
+            isOpen={showRelayGuideModal}
+            onClose={() => setShowRelayGuideModal(false)}
+            isDark={isDark}
+            lang={lang}
           />
         )}
       </div>

@@ -577,7 +577,13 @@ export function parseRelayUrl(input: string): { url: string; secret: string; isV
   try {
     const raw = trimmed.startsWith('http://') || trimmed.startsWith('https://') ? trimmed : `https://${trimmed}`;
     const parsed = new URL(raw);
-    const secret = parsed.searchParams.get('secret') || '';
+    let secret = parsed.searchParams.get('secret') || '';
+    if (!secret && parsed.search && parsed.search.length > 1) {
+      const q = parsed.search.slice(1);
+      if (!q.includes('=')) {
+        secret = decodeURIComponent(q);
+      }
+    }
     return {
       url: parsed.origin + parsed.pathname,
       secret,

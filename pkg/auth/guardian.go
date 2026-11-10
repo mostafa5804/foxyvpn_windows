@@ -355,11 +355,47 @@ func (g *GuardianService) newDirectTransport() *http.Transport {
 					return conn, nil
 				}
 			}
+
+			// Cloudflare Worker and Pages domains: intercept Iranian ISP DNS spoofing and blocked 188.114.x.x IPs
+			if splitErr == nil {
+				lowerHost := strings.ToLower(host)
+				if strings.Contains(lowerHost, "workers.dev") || strings.Contains(lowerHost, "pages.dev") {
+					cleanCFIPs := []string{"104.21.5.198", "172.67.182.196", "162.159.136.234", "104.16.132.229", "104.21.32.1", "172.67.150.12"}
+					
+					var candidateIPs []string
+					if ips, err := net.DefaultResolver.LookupIP(ctx, "ip4", host); err == nil {
+						for _, ip := range ips {
+							ipStr := ip.String()
+							// Skip Iranian censorship hijacked IPs and blocked 188.114.x.x subnet
+							if strings.HasPrefix(ipStr, "10.10.34.") || strings.HasPrefix(ipStr, "10.10.35.") || strings.HasPrefix(ipStr, "188.114.") {
+								continue
+							}
+							candidateIPs = append(candidateIPs, ipStr)
+						}
+					}
+					// Always append clean Cloudflare Anycast IPs as priority fallbacks
+					candidateIPs = append(candidateIPs, cleanCFIPs...)
+
+					for _, ipStr := range candidateIPs {
+						dialCtx, dialCancel := context.WithTimeout(ctx, 3500*time.Millisecond)
+						conn, err := baseDialer.DialContext(dialCtx, "tcp4", net.JoinHostPort(ipStr, port))
+						dialCancel()
+						if err == nil {
+							return WrapHelloSplit(conn), nil
+						}
+					}
+				}
+			}
+
 			// Prefer IPv4 so client IP remains consistent across requests
 			if conn, err := baseDialer.DialContext(ctx, "tcp4", addr); err == nil {
-				return conn, nil
+				return WrapHelloSplit(conn), nil
 			}
-			return baseDialer.DialContext(ctx, network, addr)
+			conn, err := baseDialer.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			return WrapHelloSplit(conn), nil
 		},
 	}
 }
@@ -373,11 +409,7 @@ func NewGuardianService(logFn func(level, msg string)) *GuardianService {
 		logFunc:         logFn,
 		relayEnabled:    true,
 		useSharedRelays: true,
-		sharedRelays: []string{
-			"https://cf-guardian-relay.pages.dev",
-			"https://guardian-relay.foxyvpn.org",
-			"https://relay.foxyvpn.workers.dev",
-		},
+		sharedRelays: []string{},
 	}
 	svc.httpClient = &http.Client{
 		Timeout:   controlPlaneHTTPTimeout,
@@ -479,6 +511,16 @@ func (g *GuardianService) GetRelayConfig() (bool, string, bool) {
 	return g.relayEnabled, g.customRelayURL, g.useSharedRelays
 }
 
+// SetSharedRelays updates the list of active shared relay endpoints.
+func (g *GuardianService) SetSharedRelays(urls []string) {
+	g.relayMu.Lock()
+	defer g.relayMu.Unlock()
+	g.sharedRelays = urls
+	if len(urls) > 0 {
+		g.log("INFO", "Loaded %d shared relay endpoints", len(urls))
+	}
+}
+
 // sanitizeRelayDisplay removes secret keys from relay URL strings before logging or displaying.
 func sanitizeRelayDisplay(raw string) string {
 	raw = strings.TrimSpace(raw)
@@ -495,6 +537,8 @@ func sanitizeRelayDisplay(raw string) string {
 }
 
 // callSingleRelay dispatches an HTTP request to an upstream relay (Cloudflare Worker or PHP script).
+// It supports both the Arman VPN standard format (?url=https://vpn.mozilla.org/api/v1/fpn/...&secret=...)
+// and direct subpath endpoint format (/api/v1/fpn/...) for maximum compatibility.
 func (g *GuardianService) callSingleRelay(ctx context.Context, relayRawURL, method, subPath string, body []byte, accessToken string) (*http.Response, []byte, error) {
 	relayRawURL = strings.TrimSpace(relayRawURL)
 	if relayRawURL == "" {
@@ -509,41 +553,40 @@ func (g *GuardianService) callSingleRelay(ctx context.Context, relayRawURL, meth
 	}
 
 	secretKey := u.Query().Get("secret")
-	q := u.Query()
-
-	var targetURL string
-	if strings.HasSuffix(strings.ToLower(u.Path), ".php") || strings.Contains(u.Path, ".") {
-		q.Set("path", subPath)
-		u.RawQuery = q.Encode()
-		targetURL = u.String()
-	} else {
-		// Worker or endpoint URL: append subPath if not already present
-		basePath := strings.TrimRight(u.Path, "/")
-		if !strings.HasSuffix(basePath, subPath) {
-			u.Path = basePath + subPath
-		}
-		targetURL = u.String()
+	if secretKey == "" && u.RawQuery != "" && !strings.Contains(u.RawQuery, "=") {
+		secretKey = u.RawQuery
 	}
 
-	var bodyReader io.Reader
-	if len(body) > 0 {
-		bodyReader = bytes.NewReader(body)
-	}
+	upstreamTarget := strings.TrimRight(g.guardianBaseURL, "/") + subPath
 
-	req, err := http.NewRequestWithContext(ctx, method, targetURL, bodyReader)
-	if err != nil {
-		return nil, nil, err
-	}
-	applyGuardianHeaders(req)
-	if method == http.MethodPost {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if accessToken != "" {
-		req.Header.Set("Authorization", "Bearer "+accessToken)
-	}
+	// Prepare candidate URLs: 
+	// 1) Arman VPN standard relay (?url=https://vpn.mozilla.org/api/v1/fpn/token&secret=...)
+	// 2) Direct subpath (/api/v1/fpn/token?secret=...)
+	var candidateURLs []string
+
+	// Candidate 1: Arman VPN ?url= format
+	uArman := *u
+	qArman := uArman.Query()
+	qArman.Set("url", upstreamTarget)
 	if secretKey != "" {
-		req.Header.Set("X-Relay-Secret", secretKey)
+		qArman.Set("secret", secretKey)
 	}
+	uArman.RawQuery = qArman.Encode()
+	candidateURLs = append(candidateURLs, uArman.String())
+
+	// Candidate 2: Direct subpath format
+	uDirect := *u
+	basePath := strings.TrimRight(uDirect.Path, "/")
+	if !strings.HasSuffix(basePath, subPath) {
+		uDirect.Path = basePath + subPath
+	}
+	qDirect := uDirect.Query()
+	qDirect.Del("url")
+	if secretKey != "" {
+		qDirect.Set("secret", secretKey)
+	}
+	uDirect.RawQuery = qDirect.Encode()
+	candidateURLs = append(candidateURLs, uDirect.String())
 
 	client := &http.Client{
 		Timeout: controlPlaneHTTPTimeout,
@@ -552,18 +595,55 @@ func (g *GuardianService) callSingleRelay(ctx context.Context, relayRawURL, meth
 		client.Transport = g.httpClient.Transport
 	}
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer resp.Body.Close()
+	var lastErr error
+	for _, targetURL := range candidateURLs {
+		var bodyReader io.Reader
+		if len(body) > 0 {
+			bodyReader = bytes.NewReader(body)
+		}
 
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-	if err != nil {
-		return nil, nil, err
+		req, err := http.NewRequestWithContext(ctx, method, targetURL, bodyReader)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		applyGuardianHeaders(req)
+		if method == http.MethodPost {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		if accessToken != "" {
+			req.Header.Set("Authorization", "Bearer "+accessToken)
+		}
+		if secretKey != "" {
+			req.Header.Set("X-Relay-Secret", secretKey)
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		data, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		_ = resp.Body.Close()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		// If candidate 1 returned 404 or 400 because worker expects candidate 2, continue loop
+		if resp.StatusCode == http.StatusNotFound && len(candidateURLs) > 1 && targetURL == candidateURLs[0] {
+			continue
+		}
+
+		resp.Body = io.NopCloser(bytes.NewReader(data))
+		return resp, data, nil
 	}
-	resp.Body = io.NopCloser(bytes.NewReader(data))
-	return resp, data, nil
+
+	if lastErr != nil {
+		return nil, nil, lastErr
+	}
+	return nil, nil, errors.New("failed to contact relay")
 }
 
 // executeGuardianCall executes a Guardian request (status, activate, token) directly first.
@@ -679,41 +759,76 @@ func (g *GuardianService) TestRelayEndpoint(ctx context.Context, relayURL string
 		return false, "", fmt.Errorf("آدرس رله نامعتبر است: %w", err)
 	}
 
-	testURL := u.String()
-	if !strings.Contains(u.Path, ".php") && (u.Path == "" || u.Path == "/") {
-		u.Path = "/health"
-		testURL = u.String()
+	secretKey := u.Query().Get("secret")
+	if secretKey == "" && u.RawQuery != "" && !strings.Contains(u.RawQuery, "=") {
+		secretKey = u.RawQuery
 	}
 
-	start := time.Now()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, testURL, nil)
-	if err != nil {
-		return false, "", err
+	// Prepare probe URLs:
+	// Probe 1 (Arman VPN & standard worker probe): ?health=1&secret=...
+	uProbe1 := *u
+	qProbe1 := uProbe1.Query()
+	qProbe1.Set("health", "1")
+	if secretKey != "" {
+		qProbe1.Set("secret", secretKey)
 	}
-	applyGuardianHeaders(req)
-	if secret := u.Query().Get("secret"); secret != "" {
-		req.Header.Set("X-Relay-Secret", secret)
+	uProbe1.RawQuery = qProbe1.Encode()
+
+	// Probe 2: /health endpoint
+	uProbe2 := *u
+	if uProbe2.Path == "" || uProbe2.Path == "/" {
+		uProbe2.Path = "/health"
 	}
+	qProbe2 := uProbe2.Query()
+	if secretKey != "" {
+		qProbe2.Set("secret", secretKey)
+	}
+	uProbe2.RawQuery = qProbe2.Encode()
 
 	client := &http.Client{Timeout: 15 * time.Second}
 	if g.httpClient != nil && g.httpClient.Transport != nil {
 		client.Transport = g.httpClient.Transport
 	}
 
-	resp, err := client.Do(req)
-	latency := time.Since(start).Milliseconds()
-	if err != nil {
-		return false, fmt.Sprintf("%dms", latency), fmt.Errorf("خطای ارتباط با سرور رله: %w", err)
-	}
-	defer resp.Body.Close()
+	start := time.Now()
+	var lastErr error
 
-	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent {
-		return true, fmt.Sprintf("%dms", latency), nil
+	for _, probeURL := range []string{uProbe1.String(), uProbe2.String()} {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		applyGuardianHeaders(req)
+		req.Header.Set("Accept", "application/json, text/html, */*")
+		if secretKey != "" {
+			req.Header.Set("X-Relay-Secret", secretKey)
+		}
+
+		resp, err := client.Do(req)
+		latency := time.Since(start).Milliseconds()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent {
+			return true, fmt.Sprintf("%dms", latency), nil
+		}
+		if resp.StatusCode == http.StatusForbidden {
+			return false, fmt.Sprintf("%dms", latency), errors.New("کلید رمز رله (Secret) نامعتبر یا ثبت‌نشده است (HTTP 403)")
+		}
+		if resp.StatusCode == http.StatusBadGateway {
+			return false, fmt.Sprintf("%dms", latency), errors.New("سرور ورکر بالا است ولی ارتباط آن با موزیلا برقرار نشد (HTTP 502)")
+		}
 	}
-	if resp.StatusCode == http.StatusForbidden {
-		return false, fmt.Sprintf("%dms", latency), errors.New("کلید رمز رله (Secret) نامعتبر یا ثبت‌نشده است (HTTP 403)")
+
+	latency := time.Since(start).Milliseconds()
+	if lastErr != nil {
+		return false, fmt.Sprintf("%dms", latency), fmt.Errorf("خطای ارتباط با سرور رله: %w", lastErr)
 	}
-	return false, fmt.Sprintf("%dms", latency), fmt.Errorf("سرور رله کد %d بازگرداند", resp.StatusCode)
+	return false, fmt.Sprintf("%dms", latency), errors.New("پاسخ نامعتبر از سرور رله دریافت شد")
 }
 
 // deriveAuthPW performs FxA quickStretch (PBKDF2-HMAC-SHA256) + HKDF-SHA256.
@@ -1916,6 +2031,10 @@ func (g *GuardianService) FetchProxyPass(ctx context.Context, accessToken string
 		return nil, ErrTokenInvalid
 	case http.StatusTooManyRequests:
 		return nil, ErrQuotaExceeded
+	}
+
+	if resp.StatusCode == 451 || bytes.Contains(data, []byte("unavailable_in_region")) {
+		return nil, fmt.Errorf("خطای تحریم ۴۵۱ موزیلا: آی‌پی مبدا برای صدور مجوز مسدود است. لطفاً آدرس ورکر کلادفلر خود را در تنظیمات وارد کنید یا از Control-Plane Proxy استفاده نمایید")
 	}
 
 	if resp.StatusCode != http.StatusOK {

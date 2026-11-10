@@ -1,0 +1,17 @@
+{
+  "version": "1.1.0",
+  "updated_at": "2026-11-10T00:00:00Z",
+  "description": "FoxyVPN Mozilla Guardian Relays (HTTP 451 Bypass). Add working Cloudflare Worker relays here.",
+  "relays": [
+    {
+      "name": "Community Shared Cloudflare Worker 1 (Silver-Route)",
+      "url": "https://super-sound-e970.silver-route-01.workers.dev/?secret=arman",
+      "enabled": true
+    },
+    {
+      "name": "Community Shared Cloudflare Worker 2 (Autumn-Sun)",
+      "url": "https://autumn-sun-0631.salar982020.workers.dev/?secret=arman",
+      "enabled": true
+    }
+  ]
+}

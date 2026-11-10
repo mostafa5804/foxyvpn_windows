@@ -268,4 +268,17 @@ test('parseRelayUrl parses origins, query secrets, and validates formats', async
   assert.equal(customDomainRelay.isValid, true);
   assert.equal(customDomainRelay.url, 'https://relay.mydomain.com/');
   assert.equal(customDomainRelay.secret, 'my_secret_token');
+
+  // Format with raw secret without key (?my_secret_998979695949)
+  const rawSecretRelay = parseRelayUrl('https://foxy.erfani.workers.dev/?my_secret_998979695949');
+  assert.equal(rawSecretRelay.isValid, true);
+  assert.equal(rawSecretRelay.url, 'https://foxy.erfani.workers.dev/');
+  assert.equal(rawSecretRelay.secret, 'my_secret_998979695949');
+
+  // Arman VPN community format
+  const armanRelay = parseRelayUrl('https://super-sound-e970.silver-route-01.workers.dev/?secret=arman');
+  assert.equal(armanRelay.isValid, true);
+  assert.equal(armanRelay.url, 'https://super-sound-e970.silver-route-01.workers.dev/');
+  assert.equal(armanRelay.secret, 'arman');
 });
+
