@@ -12,8 +12,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
